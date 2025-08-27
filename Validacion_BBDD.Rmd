@@ -1,0 +1,972 @@
+---
+title: "Validation_DB"
+author: "Alba de la Puente Noël"
+date: "2025-06-05"
+output: html_document
+---
+
+
+```{r setup, include=FALSE}
+# --- Instalar y cargar paquetes necesarios ---
+if (!require("BiocManager", quietly = TRUE))
+  install.packages("BiocManager")
+
+BiocManager::install(version = "3.20", ask = FALSE)
+BiocManager::install("GEOquery", ask = FALSE)
+BiocManager::install("org.Hs.eg.db", ask = FALSE)
+```
+
+```{r}
+library(GEOquery)
+library(dplyr)
+library(tidyr)
+library(tibble)
+library(org.Hs.eg.db)
+
+# --- Descargar datos GSE91061 ---
+gse91061 <- getGEO("GSE91061")
+
+# Cargar matriz FPKM localmente
+fpkm_matrix <- read.csv("C:/Users/adelapuente/Downloads/GSE91061_BMS038109Sample.hg19KnownGene.fpkm.csv.gz",
+                        header = TRUE, check.names = FALSE, stringsAsFactors = FALSE)
+
+# Asignar fila 1 como rownames y eliminar esa columna
+rownames(fpkm_matrix) <- fpkm_matrix[, 1]
+fpkm_matrix <- fpkm_matrix[, -1]
+
+# Extraer phenodata
+eset <- gse91061[[1]]
+pheno_df <- pData(eset)
+
+# Convertir IDs de filas (que son ENTREZIDs) a símbolos genéticos
+gene_ids <- rownames(fpkm_matrix)
+
+symbols <- mapIds(org.Hs.eg.db,
+                  keys = gene_ids,
+                  column = "SYMBOL",
+                  keytype = "ENTREZID",
+                  multiVals = "first")
+
+# Agregar columna Symbol a la matriz
+fpkm_matrix <- as_tibble(fpkm_matrix, rownames = "EntrezID")
+fpkm_matrix <- fpkm_matrix %>%
+  mutate(Symbol = symbols[EntrezID])
+
+# Reordenar columnas para que Symbol sea la primera y EntrezID la segunda
+fpkm_matrix <- fpkm_matrix %>%
+  dplyr::select(Symbol, EntrezID, everything(), -EntrezID)
+
+# --- Convertir matriz a formato largo para hacer join con metadatos ---
+
+fpkm_long <- fpkm_matrix %>%
+  pivot_longer(cols = -Symbol, names_to = "Sample", values_to = "FPKM")
+
+# Preparamos metadatos usando 'title' (coincide con nombres columnas de fpkm)
+meta_subset <- pheno_df %>%
+  dplyr::select(title, `response:ch1`, `visit (pre or on treatment):ch1`) %>%
+  dplyr::rename(
+    Sample = title,
+    Response = `response:ch1`,
+    Visit = `visit (pre or on treatment):ch1`
+  )
+
+
+# Ver muestras comunes
+common_samples <- intersect(fpkm_long$Sample, meta_subset$Sample)
+cat("Número de muestras comunes:", length(common_samples), "\n")
+
+# Filtrar por muestras comunes y unir metadatos
+fpkm_annotated <- fpkm_long %>%
+  filter(Sample %in% common_samples) %>%
+  left_join(meta_subset, by = "Sample")
+
+# Reordenar columnas para que metadata esté antes que genes
+fpkm_annotated <- fpkm_annotated %>%
+  dplyr::select(Sample, Response, Visit, Symbol, FPKM)
+
+# Calcular mínimo FPKM positivo (excluyendo ceros y NA)
+min_positive <- min(fpkm_annotated$FPKM[fpkm_annotated$FPKM > 0], na.rm = TRUE)
+
+
+# Transformar FPKM a log2(FPKM + 1)
+fpkm_annotated_log <- fpkm_annotated %>%
+  dplyr::mutate(log2FPKM = log2(FPKM+1))
+
+# Mostrar las primeras filas del resultado
+head(fpkm_annotated_log)
+
+# Mostrar ejemplo
+head(fpkm_annotated_log)
+
+
+#seleccionamos las pre treatment
+fpkm_pre <- fpkm_annotated_log %>%
+  dplyr::filter(Visit == "Pre")
+
+# Mostrar ejemplo
+head(fpkm_pre)
+
+
+
+
+#SELECCIONAMOS LAS BRAF-mut
+library(dplyr)
+
+# Pacientes que quieres seleccionar
+pacientes_seleccionados <- c(11, 13, 18, 23, 27, 32, 34, 47, 51, 66, 70, 72, 77, 83, 9, 92)
+
+# Primero filtras por Visit == "Pre"
+fpkm_pre <- fpkm_annotated_log %>%
+  filter(Visit == "Pre")
+
+# Extraer el número del paciente desde la columna Sample
+# Aquí extraemos el número después de "Pt" y antes de "_"
+fpkm_pre <- fpkm_pre %>%
+  mutate(Patient_num = as.numeric(sub("Pt(\\d+)_.*", "\\1", Sample)))
+
+# Filtrar solo los pacientes que están en la lista
+fpkm_pre_sel <- fpkm_pre %>%
+  filter(Patient_num %in% pacientes_seleccionados)
+
+
+# Pacientes que sí están en fpkm_pre
+pacientes_en_fpkm <- unique(fpkm_pre$Patient_num)
+
+# Pacientes que NO están en fpkm_pre
+pacientes_no_en_fpkm <- setdiff(pacientes_seleccionados, pacientes_en_fpkm)
+
+cat("Pacientes de la lista que NO están en fpkm_pre:\n")
+print(pacientes_no_en_fpkm)
+
+
+#RESPUESTAS
+response_actualizada <- tribble(
+  ~Patient, ~Response_update,
+  "Pt1", "PD",
+  "Pt10", "SD",
+  "Pt100", "PD",
+  "Pt101", "PR",
+  "Pt102", "SD",
+  "Pt103", "PD",
+  "Pt104", "PR",
+  "Pt106", "PD",
+  "Pt108", "SD",
+  "Pt11", "PD",
+  "Pt13", "PD",
+  "Pt17", "PD",
+  "Pt18", "PR",
+  "Pt2", "SD",
+  "Pt23", "PD",
+  "Pt24", "PD",
+  "Pt25", "PD",
+  "Pt26", "SD",
+  "Pt27", "PD",
+  "Pt28", "PD",
+  "Pt29", "PD",
+  "Pt3", "PR",
+  "Pt30", "CR",
+  "Pt31", "PD",
+  "Pt32", "PD",
+  "Pt34", "PR",
+  "Pt36", "SD",
+  "Pt37", "SD",
+  "Pt38", "SD",
+  "Pt39", "PD",
+  "Pt4", "SD",
+  "Pt44", "PR",
+  "Pt46", "PD",
+  "Pt47", "PD",
+  "Pt48", "CR",
+  "Pt49", "PR",
+  "Pt5", "PD",
+  "Pt51", "PD",
+  "Pt52", "PD",
+  "Pt53", "PR",
+  "Pt54", "PR",
+  "Pt58", "SD",
+  "Pt59", "SD",
+  "Pt60", "PD",
+  "Pt62", "PD",
+  "Pt65", "SD",
+  "Pt66", "PD",
+  "Pt67", "SD",
+  "Pt68", "PR",
+  "Pt7", "PR",
+  "Pt70", "SD",
+  "Pt71", "SD",
+  "Pt72", "PR",
+  "Pt73", "SD",
+  "Pt74", "NE",
+  "Pt76", "NE",
+  "Pt77", "SD",
+  "Pt78", "PD",
+  "Pt79", "SD",
+  "Pt8", "PD",
+  "Pt82", "SD",
+  "Pt83", "SD",
+  "Pt84", "PD",
+  "Pt85", "PD",
+  "Pt86", "PD",
+  "Pt87", "SD",
+  "Pt89", "SD",
+  "Pt9", "PD",
+  "Pt90", "PD",
+  "Pt92", "SD",
+  "Pt93", "PD",
+  "Pt94", "CR",
+  "Pt98", "SD"
+)
+
+fpkm_pre_sel <- fpkm_pre_sel %>%
+  mutate(Patient_num = stringr::str_extract(Sample, "Pt\\d+"))
+
+fpkm_pre_sel <- fpkm_pre_sel %>%
+  left_join(response_actualizada, by = c("Patient_num" = "Patient"))
+
+
+
+fpkm_pre_sel <- fpkm_pre_sel %>%
+  mutate(response_opt = case_when(
+    Response_update %in% c("PD", "SD") ~ "NR",
+    Response_update == "PR" ~ "PR",
+    Response_update == "CR" ~ "PR",
+    TRUE ~ NA_character_  # Aquí descartamos "NE" y cualquier otro valor no deseado
+  )) %>%
+  filter(!is.na(response_opt)) 
+
+
+
+# Ya tienes la tabla con las muestras Pre y solo de los pacientes seleccionados
+head(fpkm_pre_sel)
+
+```
+
+```{r DESeq GSE91061}
+library(tidyr)
+library(dplyr)
+
+fpkm_pre_sel <- fpkm_pre_sel %>% 
+  filter(!is.na(Symbol))
+
+
+
+# Asegúrate de usar log2FPKM para el análisis
+expr_wide <- fpkm_pre_sel %>%
+  dplyr::select(Patient_num, Symbol, log2FPKM) %>%
+  tidyr::pivot_wider(names_from = Patient_num, values_from = log2FPKM)
+head(expr_wide)
+colnames(expr_wide)
+
+expr_mat <- expr_wide %>%
+  tibble::column_to_rownames("Symbol")
+
+
+
+# Verifica dimensiones
+dim(expr_mat)
+
+
+
+# Crear un vector con nombres:
+group_info <- fpkm_pre_sel %>%
+  distinct(Patient_num, response_opt) %>%
+  filter(!is.na(response_opt)) %>%
+  arrange(Patient_num)
+
+group_vector <- setNames(group_info$response_opt, group_info$Patient_num)
+
+# Asegurarse de que el orden coincida
+expr_mat <- expr_mat[, names(group_vector)]
+
+
+colnames(expr_mat)
+
+# Ver nombres del vector group_vector
+names(group_vector)
+
+# ¿Coinciden?
+setdiff(names(group_vector), colnames(expr_mat))
+setdiff(colnames(expr_mat), names(group_vector))
+
+
+
+library(limma)
+
+# Crear diseño sin intercepto
+design <- model.matrix(~ 0 + factor(group_vector))
+colnames(design) <- levels(factor(group_vector))  # Esto debería dar: "CR", "NR", "PR"
+
+# Ajuste lineal
+fit <- lmFit(expr_mat, design)
+
+# Por ejemplo, si quieres comparar dos grupos (p.ej. R vs NR):
+contrast_matrix <- makeContrasts(
+  PRvsNR = PR - NR,
+  levels = design
+)
+
+fit <- lmFit(expr_mat, design)
+fit2 <- contrasts.fit(fit, contrast_matrix)
+fit2 <- eBayes(fit2)
+
+# Resultados para una de las comparaciones:
+results_PRvsNR <- topTable(fit2, coef = "PRvsNR", adjust.method = "BH", number = Inf)
+
+
+
+
+
+#VOLCANO
+library(ggplot2)
+
+
+# Añadir columna para significancia
+results_PRvsNR$significant <- (results_PRvsNR$P.Value < 0.05) & (abs(results_PRvsNR$logFC) > 1)
+
+ggplot(results_PRvsNR, aes(x = logFC, y = -log10(P.Value), color = significant)) +
+  geom_point(alpha = 0.6) +
+  scale_color_manual(values = c("grey", "red")) +
+  theme_minimal() +
+  labs(title = "Volcano plot PR vs NR",
+       x = "log2 Fold Change",
+       y = "-log10 P-valor") +
+  geom_vline(xintercept = c(-1, 1), linetype = "dashed", color = "blue") +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "blue")
+
+
+
+
+# --------------------------
+# 1. Definir genes de interés
+# --------------------------
+genes_interes <- c("CXCL9", "CXCL1", "KIT")
+
+# Asegúrate de que los genes estén presentes
+genes_presentes <- genes_interes[genes_interes %in% rownames(expr_mat)]
+
+# --------------------------
+# 2. Filtrar matriz de expresión
+# --------------------------
+expr_interes <- expr_mat[genes_presentes, ]  # genes x muestras
+
+# --------------------------
+# 3. Preparar datos para ggplot
+# --------------------------
+# Transponer y convertir a data.frame
+expr_interes_df <- as.data.frame(t(expr_interes), check.names = FALSE)
+expr_interes_df$Response <- group_vector[rownames(expr_interes_df)]
+
+# Eliminar muestras sin grupo asignado
+expr_interes_df <- expr_interes_df[!is.na(expr_interes_df$Response), ]
+
+# Convertir a formato largo para ggplot
+plot_data <- expr_interes_df %>%
+  pivot_longer(
+    cols = -Response,
+    names_to = "Gene",
+    values_to = "Expression"
+  )
+
+# --------------------------
+# 4. Crear boxplots
+# --------------------------
+library(ggpubr)
+
+ggplot(plot_data, aes(x = Response, y = Expression, fill = Response)) +
+  geom_boxplot(width = 0.6, outlier.shape = NA) +
+  geom_jitter(width = 0.15, alpha = 0.5, size = 1.5) +
+  facet_wrap(~ Gene, scales = "free_y", ncol = 3) +
+  theme_bw(base_size = 12) +
+  labs(
+    title = "Expresión de Genes de Interés por Grupo de Respuesta (PR vs NR)",
+    x = "Grupo de Respuesta",
+    y = "log2(FPKM + pseudocounts)",
+    fill = "Grupo"
+  ) +
+  scale_fill_manual(values = c("PR" = "steelblue4", "NR" = "lightblue")) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    strip.text = element_text(face = "bold", size = 10),
+    plot.title = element_text(hjust = 0.5, face = "bold")
+  ) +
+  stat_compare_means(
+    method = "t.test",
+    label = "p.format",
+    size = 3.5,
+    label.y.npc = 0.95
+  )
+
+# --------------------------
+# 5. Guardar gráfico (opcional)
+# --------------------------
+ggsave(
+  filename = "Boxplots_Genes_Interes_PRvsNR.png",
+  width = 10,
+  height = 4,
+  dpi = 300
+)
+
+
+
+```
+
+
+
+```{r GSE196434}
+# --- Librerías necesarias ---
+library(GEOquery)
+library(biomaRt)
+library(DESeq2)
+library(dplyr)
+library(tibble)
+library(ggplot2)
+library(pheatmap)
+library(reshape2)
+library(ggpubr)
+
+# --- Paso 1: Descargar datos y metadatos ---
+gse_id <- "GSE196434"
+gse <- getGEO(gse_id, GSEMatrix = TRUE)
+eset <- gse[[1]]
+pheno <- pData(eset)
+
+# Limpiar nombres de columnas problemáticos
+colnames(pheno) <- make.names(colnames(pheno))
+
+# Crear dataframe limpio con metadatos
+pheno_clean <- data.frame(
+  sample_code = sub(" .*", "", pheno$title),
+  sample_phase = sub(" .*", "", pheno$sample_class.ch1),
+  response = sub(".* ", "", pheno$sample_class.ch1),
+  stringsAsFactors = FALSE
+)
+
+# --- Paso 2: Cargar matriz de expresión ---
+count_data <- read.delim("C:/Users/adelapuente/Downloads/GSE196434_MR_GEO_rawdata.txt.gz", header=TRUE)
+pre_samples <- pheno_clean$sample_code[pheno_clean$sample_phase == "PRE"]
+count_pre <- count_data[, c("GENE_ID", pre_samples)]
+
+# Quitar versión de ENSEMBL ID y preparar matriz
+count_processed <- count_pre %>%
+  mutate(gene_ensembl = sub("\\..*$", "", GENE_ID)) %>%
+  dplyr::select(-GENE_ID)
+
+# --- Paso 3: Anotar genes con biomaRt ---
+library(dplyr)
+library(biomaRt)
+library(DESeq2)
+
+# --- Paso 3: Anotar genes con biomaRt ---
+ensembl <- useMart("ensembl", dataset = "hsapiens_gene_ensembl")
+
+# Añadir atributos de longitud génica
+gene_annotation <- getBM(
+  attributes = c("ensembl_gene_id", "hgnc_symbol", "gene_biotype", "start_position", "end_position"),
+  filters = "ensembl_gene_id",
+  values = count_processed$gene_ensembl,
+  mart = ensembl
+) %>%
+  filter(hgnc_symbol != "" & !is.na(hgnc_symbol)) %>%
+  mutate(gene_length = end_position - start_position + 1) %>%
+  distinct(ensembl_gene_id, .keep_all = TRUE)  # Evita duplicados
+
+# Unir anotación con la matriz de cuentas
+count_annotated <- count_processed %>%
+  left_join(gene_annotation, by = c("gene_ensembl" = "ensembl_gene_id")) %>%
+  mutate(
+    gene_symbol = ifelse(is.na(hgnc_symbol), gene_ensembl, hgnc_symbol),
+    gene_id = paste0(gene_symbol, "_", gene_ensembl)
+  )
+
+# --- Paso 4: Preparar datos para DESeq2 ---
+count_pre <- count_annotated %>%
+  dplyr::select(gene_id, all_of(intersect(pre_samples, colnames(count_annotated))))
+keep_genes <- rowSums(count_pre[, -1] > 0) >= 5
+count_filtered <- count_pre[keep_genes, ]
+rownames(count_filtered) <- count_filtered$gene_id
+count_filtered$gene_id <- NULL
+expr_matrix <- as.matrix(count_filtered)
+
+
+
+# Preparar metadatos
+col_data <- pheno_clean %>%
+  filter(sample_code %in% colnames(expr_matrix)) %>%
+  column_to_rownames("sample_code") %>%
+  dplyr::select(response)
+col_data <- col_data[colnames(expr_matrix), , drop = FALSE]
+
+
+# --- Paso 5: Análisis diferencial con DESeq2 ---
+dds <- DESeqDataSetFromMatrix(countData = expr_matrix, colData = col_data, design = ~ response)
+dds <- dds[rowSums(counts(dds) >= 10) >= 5, ]
+dds <- DESeq(dds)
+
+# Añadir longitud de genes
+gene_lengths <- gene_annotation$gene_length[match(
+  sub(".*_", "", rownames(dds)),  # Extraer ENSEMBL ID
+  gene_annotation$ensembl_gene_id
+)]
+mcols(dds)$basepairs <- gene_lengths
+
+# Calcular FPKM
+fpkm_matrix <- fpkm(dds, robust = TRUE)
+
+# Calcular log2(FPKM + 1)
+log2_fpkm_matrix <- log2(fpkm_matrix + 1)
+
+
+
+# Resultados ordenados por p-adj
+res <- results(dds, contrast = c("response", "LR", "SR"))  
+res_ordered <- res[order(res$padj), ]
+
+
+# --- Paso 6: Visualizaciones ---
+# MA-Plot
+plotMA(res, main="MA Plot", ylim=c(-2, 2))
+
+# Volcano plot
+ggplot(as.data.frame(res), aes(x = log2FoldChange, y = -log10(pvalue), color = padj < 0.05)) +
+  geom_point() +
+  theme_minimal() +
+  ggtitle("Volcano Plot") +
+  scale_color_manual(values = c("gray", "red"))
+
+# --- Paso 7: Análisis de genes de interés ---
+genes_interes <- c("HLA-DQB1", "COL11A1", "APH1B") 
+
+# Añadir símbolo a resultados
+gene_symbols <- sapply(strsplit(rownames(res_ordered), "_"), `[`, 1)
+res_df <- as.data.frame(res_ordered)
+res_df$gene_symbol <- gene_symbols
+
+# Filtrar genes de interés
+res_interes <- res_df %>%
+  filter(gene_symbol %in% genes_interes) %>%
+  arrange(padj)
+print(res_interes[, c("gene_symbol", "log2FoldChange", "pvalue", "padj")])
+
+# Obtener IDs únicos de los genes encontrados
+genes_encontrados <- rownames(res_df)[res_df$gene_symbol %in% genes_interes]
+
+# --- Paso 8: Heatmap de genes seleccionados ---
+col_data$response <- factor(col_data$response, levels = c("SR", "LR"))
+ann_colors <- list(response = c(SR = "lavender", LR = "#9370DB"))
+
+
+
+# --- Paso 8 (modificado): Heatmap con FPKM ---
+# Extraer FPKM para genes de interés
+fpkm_interes <- log2_fpkm_matrix[genes_encontrados, ]
+
+pheatmap(
+  fpkm_interes,
+  scale = "row",
+  cluster_rows = TRUE,
+  cluster_cols = TRUE,
+  annotation_col = col_data,
+  annotation_colors = ann_colors,
+  show_rownames = TRUE,
+  fontsize_row = 8,
+  main = "Heatmap de genes seleccionados (log2 FPKM + 1)"
+)
+
+# --- Paso 9 (modificado): Boxplots con FPKM ---
+# Preparar datos para ggplot
+fpkm_interes_df <- as.data.frame(t(fpkm_interes))
+fpkm_interes_df$response <- col_data$response[match(rownames(fpkm_interes_df), rownames(col_data))]
+
+melted_fpkm <- melt(fpkm_interes_df, id.vars = "response", 
+                   variable.name = "Gene", value.name = "FPKM")
+melted_fpkm$Gene <- sapply(strsplit(as.character(melted_fpkm$Gene), "_"), `[`, 1)
+
+# Crear boxplots
+ggplot(melted_fpkm, aes(x = response, y = FPKM, fill = response)) +
+  geom_boxplot(outlier.shape = NA) +
+  geom_jitter(width = 0.2, alpha = 0.5, size = 1) +
+  facet_wrap(~ Gene, scales = "free_y", ncol = 3) +
+  scale_fill_manual(values = c("SR" = "lavender", "LR" = "#9370DB")) +
+  theme_bw() +
+  labs(title = "Expresión de Genes por Grupo de Respuesta",
+       x = "Response Group",
+       y = "log2(FPKM + pseudocounts)") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  stat_compare_means(comparisons = list(c("SR", "LR")),
+                     method = "t.test",
+                     label = "p.format",
+                     size = 3)
+
+
+ggsave(
+  filename = "Boxplots_Genes_Resp.png",
+  width = 10,                   # Ancho en pulgadas
+  height = 4,                   # Alto en pulgadas
+  dpi = 300                     # Resolución
+)
+
+```
+
+
+
+
+
+```{r correct}
+
+
+#genes_interes <- c("HLA-DQB1", "COL11A1", "IL12RB2", "HEY1", "IL6", "IL18", "RIPK2", "SLC16A1", "GOT2", "PARP12", "TNFSF9", "RAD51C", "ADORA2A", "RUNX3", "GPC4")
+
+#genes_interes <- c("CXCL10", "KIT", "CXCL9", "CXCL1", "BNIP3L", "CCL14", "CXCL2", "WNT5B", "STAT1", "WNT2","GBP4", "SOX2", "GBP1", "SPRY4", "FAM124B", "IFITM1", "FCN1", "BID", "CCNA1", "VCAM1", "IDO1", "CCL4", "MAPK10", "ANGPT1", "HMGB1", "CCL18", "CCL20", "OAS3")
+
+genes_interes <- c("CXCL8", "IHH", "WNT2", "BNIP3L", "MAPK10", "CXCL1", "WNT5B", "STC1", "STAT1", "IL1B",
+  "FAM124B", "VCAM1", "HLA-DQA2", "CD8B", "CCL4", "CD45RO", "FGF18", "ACVR1C", "CXCL10", 
+  "C1QB", "HMGB1", "PTGS2", "OAS2", "TMEM140", "MYCT1", "KRAS", "IRF9", "GPR160", "OAS3",
+  "TREM1", "ITGB2", "CD2", "PRKAA2", "PTGER4", "SLC11A1", "TRAF1", "FAS")
+
+```
+
+
+
+```{r comp expr ITH}
+db_completa_log2 <- read_csv("C:/Users/adelapuente/Desktop/TFM/Nanostring/Datos finales/db_completa_log2.csv")
+db_completa_log2 <- as.data.frame(db_completa_log2)
+
+# Matriz expresión genes x muestras
+expression_matrix <- db_completa_log2 %>%
+  dplyr::select(ID, starts_with("Endogenous_")) %>%
+  column_to_rownames("ID") %>%
+  t() %>% 
+  as.matrix()
+
+# Eliminar muestra GEM12 si existe
+if ("GEM12" %in% colnames(expression_matrix)) {
+  expression_matrix <- expression_matrix[, !colnames(expression_matrix) %in% "GEM12"]
+}
+
+# Metadata muestras
+metadata <- db_completa_log2 %>%
+  dplyr::select(ID, grupo, clinical_benefit, sexo, edad_diagnostico) %>%
+  filter(ID %in% colnames(expression_matrix)) %>%
+  mutate(
+    grupo = factor(grupo, levels = c("BRAF_MEK", "ITH")),
+    clinical_benefit = factor(clinical_benefit, levels = c("low", "high"))
+  ) %>%
+  column_to_rownames("ID")
+
+db_completa_log2 <- db_completa_log2 %>%
+  mutate(
+    respuesta = case_when(
+      grupo == "ITH" & clinical_benefit == "high" ~ "ITH_high",
+      grupo == "ITH" & clinical_benefit == "low" ~ "ITH_low",
+      grupo == "BRAF_MEK" & clinical_benefit == "high" ~ "BRAF_MEK_high",
+      grupo == "BRAF_MEK" & clinical_benefit == "low" ~ "BRAF_MEK_low"
+    )
+  )
+
+# Extraer nombres de gen del formato "Endogenous_SYMBOL_TRANSCRIPT"
+gene_symbols <- gsub("^Endogenous_([A-Z0-9]+)_.*", "\\1", rownames(expression_matrix))
+
+# Reemplazar rownames por los símbolos
+rownames(expression_matrix) <- gene_symbols
+
+
+# Genes presentes en cada base
+genes_fpkm <- unique(fpkm_pre_sel$Symbol)
+genes_expression <- rownames(expression_matrix)
+
+# Genes en común
+genes_comunes <- intersect(genes_fpkm, genes_expression)
+cat("Número de genes en común:", length(genes_comunes), "\n")
+
+
+
+
+library(dplyr)
+
+# Media expresión para PR
+fpkm_pr_mean <- fpkm_pre_sel %>%
+  filter(Symbol %in% genes_comunes, response_opt == "PR") %>%
+  group_by(Symbol) %>%
+  summarise(mean_expr = mean(log2FPKM, na.rm = TRUE)) %>%
+  column_to_rownames("Symbol")
+
+# Media expresión para NR
+fpkm_nr_mean <- fpkm_pre_sel %>%
+  filter(Symbol %in% genes_comunes, response_opt == "NR") %>%
+  group_by(Symbol) %>%
+  summarise(mean_expr = mean(log2FPKM, na.rm = TRUE)) %>%
+  column_to_rownames("Symbol")
+
+
+# Muestras por grupo
+ith_high_samples <- db_completa_log2 %>%
+  filter(respuesta == "ITH_high") %>%
+  pull(ID)
+
+ith_low_samples <- db_completa_log2 %>%
+  filter(respuesta == "ITH_low") %>%
+  pull(ID)
+
+# Filtrar matriz para genes comunes
+expr_ith_high <- expression_matrix[genes_comunes, ith_high_samples, drop = FALSE]
+expr_ith_low  <- expression_matrix[genes_comunes, ith_low_samples, drop = FALSE]
+
+# Calcular medias por gen
+ith_high_mean <- rowMeans(expr_ith_high, na.rm = TRUE)
+ith_low_mean  <- rowMeans(expr_ith_low, na.rm = TRUE)
+
+
+# Orden común de genes
+orden_genes <- intersect(rownames(fpkm_pr_mean), names(ith_high_mean))
+
+# Alinear vectores
+pr_vector   <- fpkm_pr_mean[orden_genes, , drop = TRUE]
+nr_vector   <- fpkm_nr_mean[orden_genes, , drop = TRUE]
+ithh_vector <- ith_high_mean[orden_genes]
+ithl_vector <- ith_low_mean[orden_genes]
+
+# Correlaciones Pearson
+cor_pr_ithh <- cor(pr_vector, ithh_vector, method = "spearman")
+cor_nr_ithl <- cor(nr_vector, ithl_vector, method = "spearman")
+
+cat("🔵 Correlación PR vs ITH_high:", round(cor_pr_ithh, 3), "\n")
+cat("🔴 Correlación NR vs ITH_low:", round(cor_nr_ithl, 3), "\n")
+
+
+
+# --- GRÁFICOS DE DISPERSIÓN ---
+# PR vs ITH_high
+library(ggrepel)
+
+genes_marcados <- c("CXCL10", "KIT", "CXCL9", "CXCL1", "BNIP3L", "CCL14", "CXCL2","WNT5B", "STAT1", "WNT2", "GBP4", "SOX2","GBP1","SPRY4", "IDO1", "CCL4","MAPK10", "ANGPT1", "HMGB1", "CCL18", "CCL20", "OAS3","FAM124B", "IFITM1",  "FCN1", "BID",  "CCNA1",  "VCAM1")
+
+# PR vs ITH_high con etiquetas
+df_pr_plot <- data.frame(
+  Gene = orden_genes,
+  FPKM_PR = pr_vector,
+  Expr_ITH_High = ithh_vector
+)
+
+df_pr_plot$highlight <- ifelse(df_pr_plot$Gene %in% genes_marcados, df_pr_plot$Gene, NA)
+
+plot_ITH_high <- ggplot(df_pr_plot, aes(x = FPKM_PR, y = Expr_ITH_High)) +
+  geom_point(color = "#3B4CC0", size = 2, alpha = 0.6, position = position_jitter(width = 0.2, height = 0.2)) +
+  geom_smooth(method = "lm", se = TRUE, color = "black") +
+  geom_text_repel(aes(label = highlight), na.rm = TRUE, size = 3, max.overlaps = 20) +
+  labs(title = paste0("Correlación PR vs ITH_high (r = ", round(cor_pr_ithh, 2), ")"),
+       x = "Expresión media log2FPKM (PR)",
+       y = "Expresión media log2 (ITH low)") +
+  theme_minimal()
+
+ggsave("PR_vs_ITH_high.png", plot = plot_ITH_high, width = 8, height = 6, dpi = 300)
+
+# NR vs ITH_low con etiquetas
+df_nr_plot <- data.frame(
+  Gene = orden_genes,
+  FPKM_NR = nr_vector,
+  Expr_ITH_Low = ithl_vector
+)
+
+df_nr_plot$highlight <- ifelse(df_nr_plot$Gene %in% genes_marcados, df_nr_plot$Gene, NA)
+
+plot_ITH_low <- ggplot(df_nr_plot, aes(x = FPKM_NR, y = Expr_ITH_Low)) +
+  geom_point(color = "#A7C7E7", size = 2, alpha = 0.6, position = position_jitter(width = 0.2, height = 0.2)) +
+  geom_smooth(method = "lm", se = TRUE, color = "black") +
+  geom_text_repel(aes(label = highlight), na.rm = TRUE, size = 3, max.overlaps = 20) +
+  labs(title = paste0("Correlación NR vs ITH_low (r = ", round(cor_nr_ithl, 2), ")"),
+       x = "Expresión media log2FPKM (NR)",
+       y = "Expresión media log2 (ITH low)") +
+  theme_minimal()
+
+ggsave("NR_vs_ITH_low.png", plot = plot_ITH_low, width = 8, height = 6, dpi = 300)
+
+
+```
+
+
+
+
+
+```{r correlació BRAF_MEK}
+
+# --- Limpiar nombres de genes en RNA-seq (log2_fpkm_matrix) ---
+gene_symbols_rnaseq <- gsub("_ENSG.*", "", rownames(log2_fpkm_matrix))
+rownames(log2_fpkm_matrix) <- gene_symbols_rnaseq
+
+# --- Extraer genes comunes entre Nanostring y RNA-seq ---
+genes_nanostring <- rownames(expression_matrix)
+genes_rnaseq <- rownames(log2_fpkm_matrix)
+genes_comunes <- intersect(genes_nanostring, genes_rnaseq)
+cat("✅ Genes en común (sin filtrar):", length(genes_comunes), "\n")
+
+# --- Filtrar genes con expresión > 1 en al menos una muestra de ambos datasets ---
+expr_rnaseq <- log2_fpkm_matrix[genes_comunes, ]
+expr_nano   <- expression_matrix[genes_comunes, ]
+
+genes_filtrados <- genes_comunes[
+  rowSums(expr_rnaseq > 0.5, na.rm = TRUE) > 0 &
+  rowSums(expr_nano > 0.5, na.rm = TRUE) > 0
+]
+cat("🎯 Genes filtrados con expresión suficiente:", length(genes_filtrados), "\n")
+
+# --- RNA-seq: media por gen en LR y SR ---
+lr_samples <- rownames(col_data)[col_data$response == "LR"]
+sr_samples <- rownames(col_data)[col_data$response == "SR"]
+
+lr_expr_mean <- rowMeans(log2_fpkm_matrix[genes_filtrados, lr_samples, drop = FALSE], na.rm = TRUE)
+sr_expr_mean <- rowMeans(log2_fpkm_matrix[genes_filtrados, sr_samples, drop = FALSE], na.rm = TRUE)
+
+# --- Nanostring: media por gen en BRAF_MEK_high y BRAF_MEK_low ---
+braf_high_samples <- db_completa_log2 %>%
+  filter(respuesta == "BRAF_MEK_high") %>%
+  pull(ID)
+
+braf_low_samples <- db_completa_log2 %>%
+  filter(respuesta == "BRAF_MEK_low") %>%
+  pull(ID)
+
+missing_samples <- setdiff(braf_high_samples, colnames(expression_matrix))
+cat("⚠️ Muestras de BRAF_MEK_high que NO están en la matriz de expresión:\n")
+print(missing_samples)
+
+braf_high_valid <- intersect(braf_high_samples, colnames(expression_matrix))
+braf_low_valid  <- intersect(braf_low_samples, colnames(expression_matrix))
+
+braf_high_expr_mean <- rowMeans(expression_matrix[genes_filtrados, braf_high_valid, drop = FALSE], na.rm = TRUE)
+braf_low_expr_mean  <- rowMeans(expression_matrix[genes_filtrados, braf_low_valid, drop = FALSE], na.rm = TRUE)
+
+# --- Alinear vectores para correlación ---
+genes_orden <- intersect(names(lr_expr_mean), names(braf_high_expr_mean))
+
+vec_lr     <- lr_expr_mean[genes_orden]
+vec_sr     <- sr_expr_mean[genes_orden]
+vec_braf_h <- braf_high_expr_mean[genes_orden]
+vec_braf_l <- braf_low_expr_mean[genes_orden]
+
+# --- Correlaciones ---
+cor_lr_braf_h <- cor(vec_lr, vec_braf_h, method = "spearman")
+cor_sr_braf_l <- cor(vec_sr, vec_braf_l, method = "spearman")
+
+cat("🔵 Correlación LR vs BRAF_MEK_high:", round(cor_lr_braf_h, 3), "\n")
+cat("🔴 Correlación SR vs BRAF_MEK_low:", round(cor_sr_braf_l, 3), "\n")
+
+# --- Gráficos de dispersión con jitter para evitar acumulación ---
+library(ggrepel)
+
+genes_marcados <- c("HLA-DQB1", "COL11A1", "APH1B", "IL12RB2", "HEY1", "IL6", "IL18", "GOT2", "PARP12", "SLC16A1", "RIPK2" ) 
+# LR vs BRAF_MEK_high
+df_lr_braf <- data.frame(
+  Gene = genes_orden,
+  RNAseq_LR = vec_lr,
+  Nano_BRAF_H = vec_braf_h
+)
+
+df_lr_braf$highlight <- ifelse(df_lr_braf$Gene %in% genes_marcados, df_lr_braf$Gene, NA)
+
+plot_BRAF_high <-ggplot(df_lr_braf, aes(x = RNAseq_LR, y = Nano_BRAF_H)) +
+  geom_point(color = "#9370DB", size = 2, alpha = 0.6, position = position_jitter(width = 0.2, height = 0.2)) +
+  geom_smooth(method = "lm", se = TRUE, color = "black") +
+  geom_text_repel(aes(label = highlight), na.rm = TRUE, size = 3, max.overlaps = 20) +
+  labs(title = paste0("LR vs BRAF_MEK_high (r = ", round(cor_lr_braf_h, 2), ")"),
+       x = "Expresión media log2FPKM (LR)",
+       y = "Expresión media log2 BRAF/MEKi high") +
+  theme_minimal()
+
+ggsave("LR_vs_BRAF_high.png", plot = plot_BRAF_high, width = 8, height = 6, dpi = 300)
+
+
+# SR vs BRAF_MEK_low
+df_sr_braf <- data.frame(
+  Gene = genes_orden,
+  RNAseq_SR = vec_sr,
+  Nano_BRAF_L = vec_braf_l
+)
+
+df_sr_braf$highlight <- ifelse(df_sr_braf$Gene %in% genes_marcados, df_sr_braf$Gene, NA)
+
+plot_BRAF_low <- ggplot(df_sr_braf, aes(x = RNAseq_SR, y = Nano_BRAF_L)) +
+  geom_point(color = "#CE93D8", size = 2, alpha = 0.6, position = position_jitter(width = 0.2, height = 0.2)) +
+  geom_smooth(method = "lm", se = TRUE, color = "black") +
+  geom_text_repel(aes(label = highlight), na.rm = TRUE, size = 3, max.overlaps = 20) +
+  labs(title = paste0("SR vs BRAF_MEK_low (r = ", round(cor_sr_braf_l, 2), ")"),
+       x = "Expresión media log2FPKM (sR)",
+       y = "Expresión media log2 BRAF/MEKi low") +
+  theme_minimal()
+
+ggsave("SR_vs_BRAF_low.png", plot = plot_BRAF_low, width = 8, height = 6, dpi = 300)
+
+
+
+
+# -----------------------------
+# 📦 Paquetes necesarios
+# -----------------------------
+library(umap)
+library(ggplot2)
+library(dplyr)
+library(mclust)      # Para ARI
+library(RColorBrewer)
+
+# -----------------------------
+# 📌 1. Preparar matriz de expresión
+# -----------------------------
+# Transponer: filas = muestras, columnas = genes
+# ✔️ Filtrar solo genes presentes en la matriz
+genes_marcados_filtrados <- intersect(genes_marcados, rownames(log2_fpkm_matrix))
+
+# ✔️ Transponer: filas = muestras, columnas = genes
+expr_umap <- t(log2_fpkm_matrix[genes_marcados_filtrados, ])
+cat("📊 Dimensiones:", dim(expr_umap)[1], "muestras x", dim(expr_umap)[2], "genes\n")
+
+# -----------------------------
+# 📌 2. Aplicar UMAP
+# -----------------------------
+set.seed(123)
+umap_result <- umap(expr_umap, n_neighbors = 10, min_dist = 0.5, metric = "cosine")
+umap_df <- as.data.frame(umap_result$layout)
+colnames(umap_df) <- c("UMAP1", "UMAP2")
+umap_df$sample <- rownames(expr_umap)
+umap_df$response <- col_data[umap_df$sample, "response"]
+
+# -----------------------------
+# 📌 3. Clustering jerárquico
+# -----------------------------
+dist_umap <- dist(umap_df[, c("UMAP1", "UMAP2")])
+hc <- hclust(dist_umap, method = "ward.D2")
+umap_df$cluster <- cutree(hc, k = 2)  # 2 clusters
+
+# -----------------------------
+# 📌 4. Visualización UMAP con clusters
+# -----------------------------
+ggplot(umap_df, aes(x = UMAP1, y = UMAP2, color = response)) +
+  geom_point(size = 3, alpha = 0.85) +
+  scale_color_brewer(palette = "Set1") +
+  theme_minimal(base_size = 14) +
+  labs(title = "UMAP coloreado por respuesta real",
+       color = "Respuesta")
+
+
+# -----------------------------
+# 📌 5. Comparación con clases reales
+# -----------------------------
+cat("\n📋 Tabla de contingencia (Clusters vs Respuesta real):\n")
+print(table(Cluster = umap_df$cluster, Respuesta_real = umap_df$response))
+
+# -----------------------------
+# 📌 6. Calidad del clustering: Adjusted Rand Index (ARI)
+# -----------------------------
+# Convertir clases reales a enteros
+truth <- as.numeric(factor(umap_df$response))  # e.g., LR = 1, SR = 2
+pred <- umap_df$cluster
+
+ari <- adjustedRandIndex(truth, pred)
+cat(paste0("🎯 Adjusted Rand Index (ARI): ", round(ari, 3), "\n"))
+
+
+```
+
+
+
+
+
+
