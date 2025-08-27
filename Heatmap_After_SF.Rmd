@@ -1,0 +1,251 @@
+---
+title: "log2+Heatmap after SF+PCA"
+author: "Alba de la Puente Noël"
+date: "2025-04-15"
+output: html_document
+---
+
+
+```{r setup, include=FALSE}
+library(readr)
+library(pheatmap)
+library(dplyr)
+library(RColorBrewer)
+library(ggplot2)
+library(reshape2)
+library(tibble)
+library(patchwork)
+
+
+# Cargar los datos
+gene_expr <- read_csv("Datos finales/datos_corregidos_sizefactors.csv")
+clinic_db <- read_delim("Datos finales/DB_final_23feb.csv", 
+    delim = ";", escape_double = FALSE, trim_ws = TRUE)
+
+# Asignar nombres correctos a las columnas
+nombres_reales <- c(
+  "", "GEM12", "GEM13", "GEM14", "GEM17", "GEM18", "GEM19", "GEM2", "GEM3", "GEM4", "GEM5", "GEM6",
+  "GEM21", "GEM22", "GEM23", "GEM24", "GEM25", "GEM26", "GEM27", "GEM28", "GEM29", "GEM30", "GEM31",
+  "GEM1", "GEM32", "GEM33", "GEM34", "GEM35", "GEM36", "GEM37", "GEM38", "GEM42")
+
+colnames(gene_expr) <- nombres_reales
+
+# Transponer y limpiar los datos
+gene_expr_t <- as.data.frame(t(gene_expr), stringsAsFactors = FALSE)
+colnames(gene_expr_t) <- gene_expr_t[1, ]
+gene_expr_t <- gene_expr_t[-1, ]
+
+# Convertir todas las columnas (excepto la primera que será el ID) a numéricas
+gene_expr_t_numeric <- gene_expr_t
+gene_expr_t_numeric[] <- lapply(gene_expr_t_numeric, function(x) as.numeric(as.character(x)))
+
+# Encontrar el valor mínimo no cero en los datos
+min_no_zero <- min(gene_expr_t_numeric[gene_expr_t_numeric > 0], na.rm = TRUE)
+
+# Aplicar log2 pseudocounts (añadir la mitad del mínimo no cero para evitar -Inf)
+gene_expr_t_log2 <- log2(gene_expr_t_numeric + (min_no_zero / 2))
+
+# Añadir el ID de nuevo
+gene_expr_t_log2 <- tibble::rownames_to_column(gene_expr_t_log2, var = "ID")
+
+# Ordenar la base de datos clínica
+orden_ids <- c("GEM12", "GEM13", "GEM14", "GEM17", "GEM18", "GEM19", "GEM2", "GEM3", "GEM4", "GEM5", "GEM6",
+               "GEM21", "GEM22", "GEM23", "GEM24", "GEM25", "GEM26", "GEM27", "GEM28", "GEM29", "GEM30", "GEM31",
+               "GEM1", "GEM32", "GEM33", "GEM34", "GEM35", "GEM36", "GEM37", "GEM38", "GEM42")
+
+clinic_db_ordenada <- clinic_db[order(match(clinic_db$ID, orden_ids)), ]
+
+# Combinar las bases de datos
+db_completa_log2 <- merge(clinic_db_ordenada, gene_expr_t_log2, by = "ID")
+
+# Guardar la base de datos completa con expresión en log2
+write.csv(db_completa_log2, file = "db_completa_log2.csv", row.names = FALSE)
+
+# Verificar los datos
+View(db_completa_log2)
+
+
+
+
+```
+
+
+```{r Heatmap log2-zscored}
+library(dplyr)
+library(tibble)
+library(pheatmap)
+library(RColorBrewer)
+
+# 1. Create expression matrix
+expr_matrix <- db_completa_log2 %>%
+  dplyr::select(ID, starts_with("Endogenous_")) %>%
+  tibble::column_to_rownames(var = "ID") %>%
+  as.matrix()
+
+# 2. Prepare clinical annotations (ensure factors for proper ordering)
+annotation_df <- data.frame(
+  row.names = db_completa_log2$ID,
+  Treatment = factor(db_completa_log2$grupo, levels = c("BRAF_MEK", "ITH")),
+  Clinical_Benefit = factor(db_completa_log2$clinical_benefit, levels = c("high", "low")),
+  stringsAsFactors = FALSE
+)
+
+# 3. Define annotation colors
+annotation_colors <- list(
+  Treatment = c(BRAF_MEK = "#9A32CD", ITH = "#00CED1"),
+  Clinical_Benefit = c(high = "#FF69B4", low = "#98FB98")
+)
+
+# 4. Heatmap parameters with z-score scaling
+heatmap_params <- list(
+  mat = expr_matrix,
+  annotation_row = annotation_df,
+  annotation_colors = annotation_colors,
+  color = colorRampPalette(rev(brewer.pal(n = 11, name = "RdBu")))(100),
+  cluster_rows = TRUE,
+  cluster_cols = TRUE,
+  clustering_method = "complete",
+  clustering_distance_rows = "euclidean",  # Explicit distance metric
+  clustering_distance_cols = "euclidean",
+  show_rownames = TRUE,  # Typically better for many genes
+  show_colnames = FALSE,
+  fontsize_row = 6,       # Smaller font if showing row names
+  main = "log2 Endogenous Gene Expression (Z-score)",
+  border_color = NA,
+  scale = "row",         # This performs z-score scaling by row
+  breaks = seq(-3, 3, length.out = 100)  # Symmetric color scale for z-scores
+)
+
+# 5. Generate and save heatmap
+pdf("Endogenous_Genes_Heatmap.pdf", width = 15, height = 10)
+do.call(pheatmap, heatmap_params)
+dev.off()
+
+# For interactive viewing
+do.call(pheatmap, modifyList(heatmap_params, list(
+  show_rownames = TRUE,  # Maybe show some row names
+  fontsize_row = 4       # Very small font if many genes
+)))
+
+
+
+```
+
+
+```{r PCA}
+# Load required packages
+library(FactoMineR)
+library(factoextra)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+
+# 1. Data preparation -----------------------------------------------------
+# Extract endogenous genes
+endogenous_cols <- grep("^Endogenous", names(db_completa_log2), value = TRUE)
+if(length(endogenous_cols) == 0) stop("No columns starting with 'Endogenous' found")
+
+# Create expression matrix
+expresion_genica <- db_completa_log2[, endogenous_cols, drop = FALSE] %>%
+  mutate_all(as.numeric)
+
+# Handle missing values
+if(any(is.na(expresion_genica))) {
+  expresion_genica <- expresion_genica %>% 
+    mutate_all(~ifelse(is.na(.), median(., na.rm = TRUE), .))
+}
+
+# 2. PCA analysis ---------------------------------------------------------
+# Scale and transpose data
+expresion_normalizada <- scale(expresion_genica)
+rownames(expresion_normalizada) <- db_completa_log2$ID
+
+# Perform PCA
+pca.results <- PCA(expresion_normalizada, graph = FALSE, ncp = 10)
+
+# 3. Variance explained ---------------------------------------------------
+varianza_explicada <- pca.results$eig[,2] / 100
+varianza_table <- data.frame(
+  PC = paste0("PC", 1:length(varianza_explicada)),
+  Variance = round(varianza_explicada, 3),
+  Cumulative = round(cumsum(varianza_explicada), 3)
+)
+print(varianza_table)
+
+# Crear gráfico de varianza explicada
+variance_plot <- ggplot(varianza_table, aes(x = PC, y = Variance)) +
+  geom_bar(stat = "identity", fill = "#4DAF4A") +
+  geom_line(aes(x = PC, y = Cumulative), group = 1, color = "blue", size = 1) +
+  geom_point(aes(x = PC, y = Cumulative), color = "blue", size = 3) +
+  labs(
+    title = "Variance Explained by Principal Components",
+    x = "Principal Component",
+    y = "Variance Explained (%)"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold", size = 14),
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "none"
+  )
+
+# Mostrar gráfico de varianza explicada
+print(variance_plot)
+
+
+
+# 4. PCA plot with 4 groups -----------------------------------------------
+# Prepare PCA data
+pca_data <- as.data.frame(pca.results$ind$coord[,1:2])
+colnames(pca_data) <- c("PC1", "PC2")
+
+# Add grouping variables
+pca_data <- pca_data %>%
+  mutate(
+    clinical_benefit = db_completa_log2$clinical_benefit,
+    grupo = db_completa_log2$grupo,
+    group = factor(paste(clinical_benefit, grupo, sep = "_"),
+                  levels = c("high_BRAF_MEK", "low_BRAF_MEK", "high_ITH", "low_ITH"))
+  )
+
+# Define colors
+color_palette <- c(
+  "high_ITH" = "#C51B8A", 
+  "low_ITH" = "#FCC5C0",
+  "high_BRAF_MEK" = "#08306B", 
+  "low_BRAF_MEK" = "#9E9AC8"
+)
+
+# Create plot
+pca_plot <- ggplot(pca_data, aes(x = PC1, y = PC2, color = group)) +
+  geom_point(size = 4, alpha = 0.8) +
+  scale_color_manual(
+    values = color_palette,
+    name = "Group",
+    labels = c("High BRAF+MEKi", "Low BRAF+MEKi", "High ITH", "Low ITH")
+  ) +
+  labs(
+    title = "PCA of Gene Expression Profiles",
+    x = paste0("PC1 (", round(varianza_explicada[1]*100, 1), "% variance)"),
+    y = paste0("PC2 (", round(varianza_explicada[2]*100, 1), "% variance)")
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold", size = 14),
+    legend.position = "bottom",
+    legend.title = element_text(face = "bold")
+  )
+
+print(pca_plot)
+
+# 6. Export results ------------------------------------------------------
+# Create output directory
+if (!dir.exists("PCA_results")) dir.create("PCA_results")
+
+# Save plots
+ggsave("PCA_results/PCA_plot.png", pca_plot, width = 10, height = 8, dpi = 300)
+
+
+
+```
+
