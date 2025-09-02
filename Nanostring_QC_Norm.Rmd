@@ -1,6 +1,6 @@
 ---
 title: "Análisis Completo de Datos NanoString IO 360"
-author: "Alba"
+author: "xxx"
 date: "`r format(Sys.Date(), '%d de %B de %Y')`"
 output: 
   html_document:
@@ -20,14 +20,14 @@ lang: es
 
 Este informe detalla la Normalización y control de calidad de un ensayo de Nanostring Immune-Oncology 360. Se ha usado la herramienta de BioConductor https://bioconductor.org/packages/release/bioc/html/NanoStringNCTools.html para realizar las normalizaciónes (nCounter y SizeFactors) y el control de calidad.
 
-1. **Instalación y carga de paquetes**:
+0. **Instalación y carga de paquetes**:
     
     ```{r Packages}
     if (!requireNamespace("BiocManager", quietly = TRUE)) {
       install.packages("BiocManager")
     }
 
-    required_packages <- c("NanoStringNCTools", "ggplot2", "ggiraph", "dplyr", "tibble", "readr", "tidyr", "RColorBrewer", "patchwork", "gridExtra", "GeomxTools", "pheatmap", "corrplot", "sva", "Biobase", "cluster", "merTools", "lme4", "reshape2", "limma", "ggrepel", "DESeq2")
+    required_packages <- c("NanoStringNCTools", "ggplot2", "ggiraph", "dplyr", "tibble", "readr", "tidyr", "RColorBrewer", "patchwork", "gridExtra", "GeomxTools", "pheatmap", "corrplot", "sva", "Biobase", "cluster", "merTools", "lme4", "reshape2", "limma", "ggrepel", "DESeq2", "here")
     for (pkg in required_packages) {
       if (!requireNamespace(pkg, quietly = TRUE)) {
         BiocManager::install(pkg)
@@ -36,89 +36,95 @@ Este informe detalla la Normalización y control de calidad de un ensayo de Nano
     }
     ```
 
-2. **Defino el directorio de trabajo**:
-    
-    ```{r Directory}
-    datadir <- "C:/Users/adelapuente/Desktop/TFM/Nanostring/Rawdata"
+ ```{r rutas y archivos}
+# =========================================
+# 1. Definir rutas de forma genérica
+# =========================================
+# Carpeta raíz del proyecto
+datadir <- here("data", "Rawdata")      # RCC y CSV originales
+results_dir <- here("results")
+plots_dir <- file.path(results_dir, "plots")
+tables_dir <- file.path(results_dir, "tables")
+
+# Crear carpetas si no existen
+dir.create(results_dir, showWarnings = FALSE)
+dir.create(plots_dir, showWarnings = FALSE)
+dir.create(tables_dir, showWarnings = FALSE)
+
+
+# =========================================
+# 2. Archivos a usar
+# =========================================
+rlf_file <- file.path(datadir, "NS_IO_360_v1.0.rlf")
+sample_annotation_file <- file.path(datadir, "NS_IO_360_v1.03runs_.csv")
+
+
+# =========================================
+# 3. Leer y procesar sample annotation
+# =========================================
+read_sample_annotation <- function(file_path) {
+  sample_data <- read.csv(file_path, check.names = FALSE, stringsAsFactors = FALSE, header = FALSE)
+  sample_data_t <- as.data.frame(t(sample_data), stringsAsFactors = FALSE)
+  colnames(sample_data_t) <- sample_data_t[1, ]
+  sample_data_t <- sample_data_t[-1, ]
+  
+  if (all(c("File Name", "Sample ID") %in% colnames(sample_data_t))) {
+    sample_data_t <- sample_data_t[, c("File Name", "Sample ID")]
+  } else {
+    stop("Las columnas 'File Name' y/o 'Sample ID' no se encuentran en el archivo CSV.")
+  }
+  
+  sample_data_t <- sample_data_t[!is.na(sample_data_t$`File Name`) & sample_data_t$`File Name` != "", ]
+  sample_data_t <- sample_data_t[!is.na(sample_data_t$`Sample ID`) & sample_data_t$`Sample ID` != "", ]
+  return(sample_data_t)
+}
+
+sample_data_t <- read_sample_annotation(sample_annotation_file)
+
+
+# =========================================
+# 4. Cargar archivos RCC
+# =========================================
+rcc_files <- list.files(datadir, pattern = "\\.RCC$", full.names = TRUE)
+rcc_names <- basename(rcc_files)
+missing_files <- setdiff(sample_data_t$`File Name`, rcc_names)
+if(length(missing_files) > 0){
+  warning("Faltan archivos RCC: ", paste(missing_files, collapse = ", "))
+} else {
+  message("Todos los archivos RCC están presentes.")
+}
     ```
 
 
-3. **Preparamos archivos de trabajo**
 
-3.1. **Leemos y mnodificamos el archivo 'sample annotation'**:
-    
-    ```{r Sample annotation}
-    rlf_file <- file.path(datadir, "NS_IO_360_v1.0.rlf")
-    sample_annotation <- file.path(datadir, "NS_IO_360_v1.03runs_.csv")
-
-    read_sample_annotation <- function(file_path) {
-      sample_data <- read.csv(file_path, check.names = FALSE, stringsAsFactors = FALSE, header = FALSE)
-      sample_data_t <- as.data.frame(t(sample_data), stringsAsFactors = FALSE)
-      colnames(sample_data_t) <- sample_data_t[1, ]
-      sample_data_t <- sample_data_t[-1, ]
-
-      if (all(c("File Name", "Sample ID") %in% colnames(sample_data_t))) {
-        sample_data_t <- sample_data_t[, c("File Name", "Sample ID")]
-      } else {
-        stop("Las columnas 'File Name' y/o 'Sample ID' no se encuentran en el archivo CSV.")
-      }
-
-      sample_data_t <- sample_data_t[!is.na(sample_data_t$`File Name`) & sample_data_t$`File Name` != "", ]
-      sample_data_t <- sample_data_t[!is.na(sample_data_t$`Sample ID`) & sample_data_t$`Sample ID` != "", ]
-
-      return(sample_data_t)
-    }
-
-    sample_data_t <- read_sample_annotation(sample_annotation)
-    ```
-
-3.2. **Cargamos los archivos RCC**:
-    
-    ```{r RCC files}
-    rcc_files <- list.files(datadir, pattern = "\\.RCC$", full.names = TRUE)
-    rcc_names <- basename(rcc_files)
-    missing_files <- setdiff(sample_data_t$`File Name`, rcc_names)
-    if (length(missing_files) > 0) {
-      warning("Los siguientes archivos en 'File Name' no coinciden con los archivos RCC en el directorio:\n", 
-              paste(missing_files, collapse = "\n"))
-    } else {
-      message("Todos los archivos en 'File Name' coinciden con los archivos RCC.")
-    }
-    ```
-
-
-
-4.  **Creamos el archivo NanoStringSet**:
-    
     ```{r NanoStringSet object}
 
-    temp_annotation_file <- tempfile(fileext = ".csv")
-    write.csv(sample_data_t, temp_annotation_file, row.names = FALSE)
+# =========================================
+# 5. Crear NanoStringSet
+# =========================================
+temp_annotation_file <- tempfile(fileext = ".csv")
+write.csv(sample_data_t, temp_annotation_file, row.names = FALSE)
 
-    nanoStringData <- readNanoStringRccSet(rcc_files, rlfFile = rlf_file, 
-                                           phenoDataFile = temp_annotation_file,
-                                           phenoDataRccColName = "File Name")
-    
+nanoStringData <- readNanoStringRccSet(
+  rcc_files,
+  rlfFile = rlf_file,
+  phenoDataFile = temp_annotation_file,
+  phenoDataRccColName = "File Name"
+)
 class(nanoStringData)
 isS4(nanoStringData)
 is(nanoStringData, "ExpressionSet")
 nanoStringData
-    ```
-    
-4.1. **Resumen de los datos de nCounter**:
- 
-```{r nCounter data}
+
+## nCounter Data Resumen
 # summarize log2 counts for each feature
 head(summary(nanoStringData, MARGIN = 1), 2)
 
 # summarize log2 counts for each sample
 head(summary(nanoStringData, MARGIN = 2), 2)
 
-```
 
-4.2. **Subsetting de los objetos de NanoStringRCCSet**:
-
-```{r NanoStringRCCSet subsetting}
+##Subsetting de los objetos de NanoStringRCCSet
 # check the number of samples in the dataset
 length(sampleNames(nanoStringData))
 
@@ -142,9 +148,11 @@ with(nonControlSubset(nanoStringData), table(CodeClass))
 
 ```
 
-5. **Control de calidad. Negative Controls**:
-    
+
 ```{r Quality Control}
+# =========================================
+# 6. Control de Calidad
+# =========================================
 # negativeControlSubset() only selects negative probes
 with(negativeControlSubset(nanoStringData), table(CodeClass))
     
@@ -209,70 +217,51 @@ head(flags_table)
 
 ```
 
-6.  **Exploración de los datos crudos**
 
-6.1 **Grafico distribución genes por paciente** 
 ```{r Gene counts distribution}
-# Convertir los datos normalizados a formato largo
+# =========================================
+# 7. Exploración de los datos crudos
+# =========================================
+
+## 7.1 Grafico distribución genes por paciente
+library(tidyverse)
+
+# Convertir datos normalizados a data.frame
 data_df <- as.data.frame(nanoStringData)
 
-# Identificar las columnas de expresión (por ejemplo, todas las que empiezan con 'Endogenous_')
+# Identificar columnas de expresión (todas las que empiezan con 'Endogenous_')
 expr_cols <- grep("^Endogenous_", colnames(data_df), value = TRUE)
 
-# Convertir solo esas columnas a formato largo
-data_long <- pivot_longer(data_df, 
+# Transformar a formato largo
+data_long <- pivot_longer(data_df,
                           cols = all_of(expr_cols),
                           names_to = "Gene",
                           values_to = "Expression")
 
-# Verificar los nombres de las columnas
-colnames(data_long)
-
-# Generar una paleta de colores con tantos colores como muestras únicas
+# Generar paleta de colores automática según número de muestras
 n_samples <- length(unique(data_long$Sample.ID))
+color_palette <- colorRampPalette(c("#08306B", "#4292C6", "#9ECAE1",
+                                    "#54278F", "#9E9AC8", "#DADAEB",
+                                    "#7A0177", "#C51B8A", "#FCC5C0"))(n_samples)
 
-blues <- colorRampPalette(c("#08306B", "#4292C6", "#9ECAE1"))(12)
-purples <- colorRampPalette(c("#54278F", "#9E9AC8", "#DADAEB"))(12)
-pinks <- colorRampPalette(c("#7A0177", "#C51B8A", "#FCC5C0"))(11)
-
-color_palette <- c(blues, purples, pinks)
-
-
-# Gráfico
+# Boxplot
 expression_plot <- ggplot(data_long, aes(x = Sample.ID, y = Expression, fill = Sample.ID)) +
   geom_boxplot(outlier.shape = NA, alpha = 0.8) +
-  scale_fill_manual(values = color_palette) + # Usamos la paleta ajustada
+  scale_fill_manual(values = color_palette) +
   theme_minimal() +
   labs(title = "Distribución de expresión",
-       x = "Muestras", 
-       y = "Expresión") +
+       x = "Muestras", y = "Expresión") +
   theme(axis.text.x = element_text(angle = 90, hjust = 1, size = 8),
-        legend.position = "none") +
-  scale_y_continuous(limits = c(0, 2000))  # Ajustar límites de expresión
+        legend.position = "none")
 
-
-# Mostrar el gráfico
+# Mostrar gráfico
 print(expression_plot)
 
-
-# Exportar con alta calidad
-ggsave(
-  filename = "boxplot_expresion_31muestras.png",
-  plot = expression_plot,
-  device = "png",
-  width = 14,        # Ancho para acomodar las 31 muestras
-  height = 7,
-  units = "in",
-  dpi = 300,
-  bg = "white"
-)
+# Exportar
+ggsave("boxplot_expression.png", expression_plot, width = 14, height = 7, units = "in", dpi = 300)
 
 
-```
-
-6.2  **Grafico counts totales por muestra** 
-```{r Gene counts}
-
+## 7.2  Grafico counts totales por muestra
 # Asegurarte de que color_palette tiene suficientes colores
 blues <- colorRampPalette(c("#08306B", "#4292C6", "#9ECAE1"))(12)
 purples <- colorRampPalette(c("#54278F", "#9E9AC8", "#DADAEB"))(12)
@@ -280,250 +269,137 @@ pinks <- colorRampPalette(c("#7A0177", "#C51B8A", "#FCC5C0"))(11)
 
 color_palette <- c(blues, purples, pinks)
 
-# Calcular los counts totales por muestra
+# Calcular counts totales por muestra
 total_counts_df <- data_long %>%
   group_by(Sample.ID) %>%
   summarise(TotalCounts = sum(Expression, na.rm = TRUE)) %>%
   ungroup()
 
-# Gráfico con colores personalizados por muestra
+# Barplot
 total_counts_plot <- ggplot(total_counts_df, aes(x = Sample.ID, y = TotalCounts, fill = Sample.ID)) +
   geom_bar(stat = "identity", alpha = 0.8) +
   scale_fill_manual(values = color_palette) +
   theme_minimal() +
-  labs(title = "Counts totales por muestra (31 muestras)",
-       x = "Muestras", 
-       y = "Counts totales") +
+  labs(title = "Counts totales por muestra", x = "Muestras", y = "Counts totales") +
   theme(axis.text.x = element_text(angle = 90, hjust = 1, size = 8),
         legend.position = "none") +
   geom_text(aes(label = round(TotalCounts)), vjust = -0.5, size = 3)
 
-# Mostrar el gráfico
 print(total_counts_plot)
 
-# Exportar
-ggsave(
-  filename = "total_counts_31muestras.png",
-  plot = total_counts_plot,
-  device = "png",
-  width = 14,
-  height = 7,
-  units = "in",
-  dpi = 300,
-  bg = "white"
-)
+ggsave("total_counts.png", total_counts_plot, width = 14, height = 7, units = "in", dpi = 300)
 
 
-
-```
-
-6.3  **0 per sample**
-```{r 0 per sample}
-
-# Obtener la matriz de counts
+## 7.7 0 per sample
+# Obtener matriz de counts
 count_matrix <- exprs(nanoStringData)
 
-# Crear un data frame que indique qué genes tienen 0 counts en cada muestra
+# Data frame de genes con 0 counts
 zero_counts <- as.data.frame(count_matrix == 0)
 names(zero_counts) <- sampleNames(nanoStringData)
 rownames(zero_counts) <- featureNames(nanoStringData)
 
-# Calcular el número de genes con 0 counts por muestra
+# Resumen: número de genes con 0 counts por muestra
 zero_counts_summary <- colSums(zero_counts)
+write.csv(data.frame(Sample = names(zero_counts_summary),
+                     Genes_with_zero_counts = zero_counts_summary),
+          file = "zero_counts_summary.csv", row.names = FALSE)
 
-print(zero_counts_summary)
-
-# Encontrar genes que tienen 0 counts en al menos una muestra
+# Matriz detallada de genes con 0 counts en al menos una muestra
 genes_with_zero <- zero_counts[rowSums(zero_counts) > 0, ]
-
-# Opcional: ordenar por frecuencia de ceros
 genes_with_zero <- genes_with_zero[order(rowSums(genes_with_zero), decreasing = TRUE), ]
-
-print(genes_with_zero)
-
-# Exportar el resumen de conteos cero por muestra
-write.csv(data.frame(Sample = names(zero_counts_summary), 
-                    Genes_with_zero_counts = zero_counts_summary),
-          file = "zero_counts_summary.csv", 
-          row.names = FALSE)
-
-# Exportar la matriz detallada de qué genes tienen 0 counts en qué muestras
 write.csv(genes_with_zero, file = "genes_with_zero_counts.csv")
 
-
-
 ```
 
 
-
-
-6.4  **KDE Plot**
 ```{r KDE Plot}
-
-# Extraer los datos de expresión (genes x muestras)
-exprs_data <- exprs(nanoStringData)
-
-# Paso: Convertir la matriz de expresión a formato largo (long format)
-exprs_df <- as.data.frame(exprs_data)
+# =========================================
+# 8. KDE Plot de distribución por muestra
+# =========================================
+exprs_df <- as.data.frame(exprs(nanoStringData))
 exprs_long <- gather(exprs_df, key = "Sample", value = "Expression", 1:ncol(exprs_df))
+exprs_long$Gene <- rep(rownames(exprs(nanoStringData)), each = ncol(exprs(nanoStringData)))
 
-# Agregar la columna de Gene
-exprs_long$Gene <- rep(rownames(exprs_data), each = ncol(exprs_data))
-
-# Ver los primeros registros para asegurarse de que los datos estén correctamente estructurados
-head(exprs_long)
-
-# Crear el gráfico
 plot_densidad <- ggplot(exprs_long, aes(x = Expression, color = Sample)) +
   geom_density(alpha = 0.5) +
-  scale_x_continuous(limits = c(-500, 500)) +
+  scale_x_continuous(limits = c(-500, 3000)) +
   theme_minimal() +
-  labs(title = "Distribución de la expresión de genes por muestra",
-       x = "Expresión de genes (counts)",
-       y = "Densidad") +
+  labs(title = "Distribución de expresión por muestra", x = "Expresión (counts)", y = "Densidad") +
   theme(legend.position = "none")
 
-# Mostrar el gráfico en pantalla
-print(plot_densidad)  # Esto hará que aparezca en tu panel de 'Plots' de RStudio
-
-# Exportar en alta resolución 
-ggsave(
-  filename = "densidad_expresion_genes.png",  # Nombre del archivo
-  plot = plot_densidad,                      # Objeto ggplot
-  device = "png",                            # Formato (también puede ser "pdf", "jpeg", etc.)
-  width = 10,                                # Ancho en pulgadas
-  height = 6,                                # Alto en pulgadas
-  units = "in",                              # Unidades (pulgadas)
-  dpi = 300                                  # Resolución (puntos por pulgada)
-)
+ggsave(file.path(plots_dir, "densidad_expresion_genes.png"), plot_densidad, width = 10, height = 6, dpi = 300)
 
 
-
-```
-
-
-
-6.5  **KDE Plot: Muestras QCBorderlineFlag**
-```{r KDE Plot: QCBlFlags}
-
-# 1. Calcular métricas de distribución
+## 8.1 Muestras atípicas
+# Calcular métricas de distribución
 dist_metrics <- exprs_long %>%
   group_by(Sample) %>%
-  summarize(
+  summarise(
     Mediana = median(Expression),
     MAD = mad(Expression),
     Distancia_KS = ks.test(Expression, ecdf(exprs_long$Expression))$statistic
   ) %>%
   arrange(desc(Distancia_KS))
 
-# 2. Identificar muestras atípicas (top 8%)
+# Top 8% muestras atípicas
 umbral <- quantile(dist_metrics$Distancia_KS, 0.92)
-muestras_atipicas <- dist_metrics %>% 
-  filter(Distancia_KS > umbral) %>% 
-  pull(Sample)
+muestras_atipicas <- dist_metrics %>% filter(Distancia_KS > umbral) %>% pull(Sample)
 
-# Paleta de colores personalizada
-colores_atipicas <- c(
-  "#FF6B9E",  # Rosa vibrante
-  "#47B8E0",  # Azul claro
-  "#7CBE7B"   # Verde fresco
-)
+# Colores automáticos (ajustar al número de muestras atípicas)
+colores_atipicas <- RColorBrewer::brewer.pal(n = max(3, length(muestras_atipicas)), name = "Set2")
 
-# 3. Visualización con colores personalizados
 ggplot(exprs_long, aes(x = Expression)) +
-  # Muestras normales (fondo)
   geom_density(data = subset(exprs_long, !(Sample %in% muestras_atipicas)), 
-               color = "gray90", alpha = 0.2, linewidth = 0.5) +
-  
-  # Muestras atípicas (resaltadas)
+               color = "gray80", alpha = 0.2) +
   geom_density(data = subset(exprs_long, Sample %in% muestras_atipicas),
-               aes(color = Sample, fill = Sample), 
-               alpha = 0.3, linewidth = 1.2) +
-  
-  # Escalas y límites
-  scale_x_continuous(limits = c(-500, 3000)) +
+               aes(color = Sample, fill = Sample), alpha = 0.3, linewidth = 1.2) +
+  labs(title = paste("Muestras atípicas:", length(muestras_atipicas)),
+       subtitle = "Basado en distancia KS",
+       x = "Expresión (counts)", y = "Densidad") +
   scale_color_manual(values = colores_atipicas) +
   scale_fill_manual(values = colores_atipicas) +
-  
-  # Etiquetas y tema
-  labs(title = paste("Muestras con distribución atípica (", length(muestras_atipicas), " muestras)"),
-       subtitle = "Basado en la distancia de Kolmogorov-Smirnov",
-       x = "Expresión génica (counts)",
-       y = "Densidad",
-       caption = paste("Muestras:", paste(muestras_atipicas, collapse = ", "))) +
-  
   theme_minimal() +
-  theme(
-    legend.position = "bottom",
-    plot.title = element_text(face = "bold", size = 14, color = "#333333"),
-    plot.subtitle = element_text(size = 11, color = "#666666"),
-    legend.title = element_blank()
-  )
+  theme(legend.position = "bottom")
 
-# Exportar el gráfico
-ggsave("muestras_atipicas_colores.png", 
-       width = 10, height = 6, 
-       dpi = 300, bg = "white")
-```
+ggsave("muestras_atipicas_colores.png", width = 10, height = 6, dpi = 300, bg = "white")
 
 
-6.6  **KDE Plot: muestras problematicas**
-```{r KDE Plot: problematic samples}
-
+## 8.2 Muestras seleccionadas(problema/flags) vs buenas
 # Seleccionar las muestras que deseas incluir
 included_samples <- c("20220215_IO360melRunC_GEM36_06.RCC", 
                       "20210316_IO360melRunA_GEM4_03.RCC", 
                       "20210316_IO360melRunA_GEM17_09.RCC", 
                       "20210316_IO360melRunA_GEM12_06.RCC")
 
-# Filtrar los datos para incluir solo las muestras seleccionadas
-exprs_long_included <- exprs_long[exprs_long$Sample %in% included_samples, ]
+exprs_long_included <- exprs_long %>% filter(Sample %in% included_samples)
+exprs_long_excluded <- exprs_long %>% filter(!Sample %in% included_samples)
 
-# Filtrar los datos para excluir las muestras seleccionadas
-exprs_long_excluded <- exprs_long[!exprs_long$Sample %in% included_samples, ]
+library(patchwork)
 
-
-# Crear el gráfico para las muestras seleccionadas
 plot_included <- ggplot(exprs_long_included, aes(x = Expression, color = Sample)) +
-  geom_density(alpha = 0.5) +  # Curvas de densidad con transparencia
-  scale_x_continuous(limits = c(-500, 3000)) +  # Limitar el rango del eje X
-  theme_minimal() +
-  labs(title = "Distribución de la expresión de genes QCBorderlineFlag Samples",
-       x = "Expresión de genes (counts)",
-       y = "Densidad") +
-  theme(legend.position = "none")  # Eliminar la leyenda
+  geom_density(alpha = 0.5) + theme_minimal() +
+  labs(title = "Muestras problemáticas", x = "Expresión", y = "Densidad") +
+  theme(legend.position = "none")
 
-# Crear el gráfico para las muestras excluidas
 plot_excluded <- ggplot(exprs_long_excluded, aes(x = Expression, color = Sample)) +
-  geom_density(alpha = 0.5) +  # Curvas de densidad con transparencia
-  scale_x_continuous(limits = c(-500, 3000)) +  # Limitar el rango del eje X
-  theme_minimal() +
-  labs(title = "Distribución de la expresión de genes para muestras sin Flags",
-       x = "Expresión de genes (counts)",
-       y = "Densidad") +
-  theme(legend.position = "none")  # Eliminar la leyenda
+  geom_density(alpha = 0.5) + theme_minimal() +
+  labs(title = "Muestras normales", x = "Expresión", y = "Densidad") +
+  theme(legend.position = "none")
 
-# Combine plots side by side with patchwork
 combined_plots <- plot_included + plot_excluded +
-  plot_annotation(title = "Comparación de distribuciones de expresión",
-                  subtitle = "Análisis de control de calidad",
-                  theme = theme(plot.title = element_text(size = 14, face = "bold")))
+  plot_annotation(title = "Comparación de distribuciones", subtitle = "Control de calidad")
 
-print(combined_plots)
-
-# Export the combined plot
-ggsave("comparacion_muestras_incluidas_excluidas.png",
-       plot = combined_plots,
-       width = 14,  # Wider to accommodate two plots
-       height = 6,
-       dpi = 300,
-       bg = "white")
-
+ggsave("comparacion_muestras_incluidas_excluidas.png", combined_plots, width = 14, height = 6, dpi = 300, bg = "white")
 ```
 
 
-6.7 **Correlation plot before normalization**
-```{r Corr plot: raw data}
+```{r Correlation plot}
+# =========================================
+# 9. Correlation plot before normalization
+# =========================================
+n_samples <- ncol(exprs(nanoStringData))
+color_palette <- RColorBrewer::brewer.pal(min(8, n_samples), "Set2")
 
 analyze_gene_class <- function(nanoStringData, gene_class, title_name) {
   # Extract data
@@ -646,7 +522,6 @@ analyze_gene_class <- function(nanoStringData, gene_class, title_name) {
 }
 
 
-
 # Analyze all three gene classes with correct prefixes
 positive_results <- analyze_gene_class(nanoStringData, "Positive", "Controles Positivos")
 housekeeping_results <- analyze_gene_class(nanoStringData, "Housekeeping", "Genes Housekeeping")
@@ -683,82 +558,59 @@ dev.off()
 
 
 
-7. **Normalizamos Data**
-
-7.1 **Positive Controls**:
 ```{r Normalization}
-# 1. QUALITY CONTROL AND NORMALIZATION
+# =========================================
+# 10. Normalización y análisis post-normalización
+# =========================================
+library(here)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(tibble)
+library(gridExtra)
 
-# Check control probes
-with(positiveControlSubset(nanoStringData), table(CodeClass))
+# =========================================
+# 10.0 Crear carpetas de resultados
+# =========================================
+results_dir <- here("results")
+sf_dir <- here(results_dir, "PostSizeFactors")
+if(!dir.exists(results_dir)) dir.create(results_dir)
+if(!dir.exists(sf_dir)) dir.create(sf_dir)
 
-# COMPREHENSIVE NORMALIZATION
+# =========================================
+# 10.1 Normalización nSolver
+# =========================================
 nanoStringData_norm <- normalize(
   nanoStringData,
   type = "nSolver",
   fromELT = "exprs",
   toELT = "exprs_norm",
-  background = "mean.2sd",               # Background subtraction
-  normTo = "housekeeping.geo.mean",      # Housekeeping normalization
-  take.log = FALSE,                       # Log2 transformation
+  background = "mean.2sd",
+  normTo = "housekeeping.geo.mean",
+  take.log = FALSE,
   return.matrix.of.endogenous.probes = FALSE,
   keep.other = TRUE
 )
 
-# QC: Check normalization results
-print(head(summary(nanoStringData_norm, MARGIN = 2), 6))
-print(head(pData(nanoStringData_norm)))
-
-
-# VISUALIZATION OF NORMALIZED DATA
-# Heatmap of top genes
-autoplot(nanoStringData_norm, 
-         type = "heatmap-genes", 
-         elt = "exprs_norm",
-         heatmapGroup = "Sample ID",
-         show_colnames_gene_limit = 10,
-         show_rownames_gene_limit = 40,
-         log2scale = FALSE)
-
-# Boxplot of expression distribution
-girafe(ggobj = autoplot(nanoStringData_norm, 
-                       "boxplot-feature", 
-                       index = featureNames(nanoStringData_norm)[3], 
-                       elt = "exprs"))
-
 # Extraer matriz de expresión normalizada
 exprs_matrix <- assay(nanoStringData_norm, "exprs_norm")
 
-
-
-```
-
-7.2 **Correlation Plot**
-```{r Corr plot: after normalization}
-
-# Function to create plots and correlations for a given gene class
-analyze_gene_class <- function(nanoStringData_norm, gene_class, title_name) {
-  # Extract data
-  counts_totales <- colSums(exprs(nanoStringData_norm))
-  class_expr <- exprs(nanoStringData_norm)[fData(nanoStringData_norm)$CodeClass == gene_class, ]
+# =========================================
+# 10.2 Función de análisis por clase de genes
+# =========================================
+analyze_gene_class <- function(nanoStringData_obj, gene_class, title_name, color_palette) {
+  counts_totales <- colSums(exprs(nanoStringData_obj))
+  class_expr <- exprs(nanoStringData_obj)[fData(nanoStringData_obj)$CodeClass == gene_class, ]
   
-  # Determine the prefix based on gene class
-  prefix <- switch(gene_class,
-                  "Positive" = "POS_",
-                  "Negative" = "NEG_",
-                  "Housekeeping" = "Housekeeping_",
-                  "")
-  
-  # Modify sample names to keep only _GEM_ part
+  # Acortar nombres de muestras (_GEM_ parte)
   modified_sample_names <- sapply(colnames(class_expr), function(x) {
     parts <- unlist(strsplit(x, "_"))
     gem_part <- parts[grep("GEM", parts)]
     if(length(gem_part) > 0) gem_part else x
   })
-  
   colnames(class_expr) <- modified_sample_names
   
-  # Boxplot of distribution across samples
+  # Boxplot
   df_box <- as.data.frame(t(class_expr))
   df_box$Muestra <- rownames(df_box)
   df_long_box <- gather(df_box, key = "Gene", value = "Count", -Muestra)
@@ -774,11 +626,10 @@ analyze_gene_class <- function(nanoStringData_norm, gene_class, title_name) {
       y = "Counts (log10)"
     ) +
     theme_minimal() +
-    theme(
-      axis.text.x = element_text(angle = 45, hjust = 1, size = 8),
-      legend.position = "none"
-    ) +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 8),
+          legend.position = "none") +
     scale_fill_manual(values = color_palette)
+
   
   # Modify gene names to remove class prefix and anything after NM if present
   modified_gene_names <- sapply(rownames(class_expr), function(x) {
@@ -791,6 +642,7 @@ analyze_gene_class <- function(nanoStringData_norm, gene_class, title_name) {
   rownames(class_expr) <- modified_gene_names
   
   # Correlation plot
+ # Correlation plot
   df_cor <- data.frame(
     Muestra = colnames(class_expr),
     Counts_Totales = counts_totales,
@@ -808,7 +660,6 @@ analyze_gene_class <- function(nanoStringData_norm, gene_class, title_name) {
     ) %>% 
     ungroup()
   
-  # Calculate positions for r labels
   label_data <- df_cor %>%
     group_by(Gene) %>%
     summarize(
@@ -816,7 +667,7 @@ analyze_gene_class <- function(nanoStringData_norm, gene_class, title_name) {
       Etiqueta_r = dplyr::first(Etiqueta_r),
       Counts_Totales = max(Counts_Totales) * 0.7,
       Expresion = max(Expresion) * (1 - 0.1 * cur_group_id())
-)
+    )
   
   p_cor <- ggplot(df_cor, aes(x = Counts_Totales, y = Expresion, color = Gene)) +
     geom_point(size = 3, alpha = 0.7) +
@@ -826,28 +677,21 @@ analyze_gene_class <- function(nanoStringData_norm, gene_class, title_name) {
       aes(x = Counts_Totales, y = Expresion, label = Etiqueta_r),
       hjust = 0, size = 4, fontface = "bold", show.legend = FALSE
     ) +
-    scale_x_continuous(labels = scales::comma, trans = "log10") +
-    scale_y_continuous(trans = "log10") +
+    scale_x_log10() +
+    scale_y_log10() +
     labs(
       title = paste("Expresión de", title_name, "vs. Counts Totales"),
-      subtitle = "Relación con el total de counts por muestra",
+      subtitle = "Post-normalización",
       x = "Counts Totales (log10)",
       y = paste("Expresión de", title_name, "(log10)"),
       color = title_name
     ) +
     theme_bw() +
-    theme(
-      legend.position = "right",
-      panel.grid.minor = element_blank()
-    ) +
+    theme(panel.grid.minor = element_blank()) +
     scale_fill_manual(values = color_palette)
   
-  # Correlation table
-  cor_table <- df_cor %>% 
-    distinct(Gene, Correlacion) %>% 
-    arrange(desc(Correlacion))
+  cor_table <- df_cor %>% distinct(Gene, Correlacion) %>% arrange(desc(abs(Correlacion)))
   
-  # Return results
   list(
     boxplot = p_box,
     correlation_plot = p_cor,
@@ -855,69 +699,49 @@ analyze_gene_class <- function(nanoStringData_norm, gene_class, title_name) {
   )
 }
 
-# Analyze all three gene classes with correct prefixes
-positive_results <- analyze_gene_class(nanoStringData_norm, "Positive", "Controles Positivos")
-housekeeping_results <- analyze_gene_class(nanoStringData_norm, "Housekeeping", "Genes Housekeeping")
-negative_results <- analyze_gene_class(nanoStringData_norm, "Negative", "Controles Negativos")
+# =========================================
+# 10.3 Ejecutar análisis para todas las clases
+# =========================================
+color_palette <- c("#E41A1C","#377EB8","#4DAF4A","#984EA3","#FF7F00","#FFFF33")  # ejemplo
 
-# Display all plots
-positive_results$boxplot
-positive_results$correlation_plot
-print(positive_results$correlation_table)
+positive_results <- analyze_gene_class(nanoStringData_norm, "Positive", "Controles Positivos", color_palette)
+housekeeping_results <- analyze_gene_class(nanoStringData_norm, "Housekeeping", "Genes Housekeeping", color_palette)
+negative_results <- analyze_gene_class(nanoStringData_norm, "Negative", "Controles Negativos", color_palette)
 
-housekeeping_results$boxplot
-housekeeping_results$correlation_plot
-print(housekeeping_results$correlation_table)
+# =========================================
+# 10.4 Guardar gráficos y tablas de correlación
+# =========================================
+ggsave(here(sf_dir, "boxplot_positive_controls.png"), positive_results$boxplot, width = 10, height = 6, dpi = 300)
+ggsave(here(sf_dir, "correlation_positive_controls.png"), positive_results$correlation_plot, width = 8, height = 6, dpi = 300)
 
-negative_results$boxplot
-negative_results$correlation_plot
-print(negative_results$correlation_table)
+ggsave(here(sf_dir, "boxplot_negative_controls.png"), negative_results$boxplot, width = 10, height = 6, dpi = 300)
+ggsave(here(sf_dir, "correlation_negative_controls.png"), negative_results$correlation_plot, width = 8, height = 6, dpi = 300)
+
+ggsave(here(sf_dir, "boxplot_housekeeping_genes.png"), housekeeping_results$boxplot, width = 10, height = 6, dpi = 300)
+ggsave(here(sf_dir, "correlation_housekeeping_genes.png"), housekeeping_results$correlation_plot, width = 10, height = 6, dpi = 300)
+
+write.csv(positive_results$correlation_table, here(sf_dir, "correlation_table_positive_controls.csv"), row.names = FALSE)
+write.csv(negative_results$correlation_table, here(sf_dir, "correlation_table_negative_controls.csv"), row.names = FALSE)
+write.csv(housekeeping_results$correlation_table, here(sf_dir, "correlation_table_housekeeping_genes.csv"), row.names = FALSE)
 
 
-# Crear un directorio para los resultados si no existe
-if(!dir.exists("QC_Results")) {
-  dir.create("QC_Results")
-}
-
-pdf(file.path("QC_Results", "All_QC_Plots_after_norm.pdf"), width = 15, height = 8)
-print(positive_results$boxplot)
-print(positive_results$correlation_plot)
-print(housekeeping_results$boxplot)
-print(housekeeping_results$correlation_plot)
-print(negative_results$boxplot)
-print(negative_results$correlation_plot)
-dev.off()
-
-```
-
-7.3 **Normalización por Size Factor**
-```{r Corrección por Size Factors}
-# First, extract your normalized expression data from the NanoString object
-# Assuming you want to work with the endogenous genes
-norm_data <- exprs(nanoStringData_norm)  # Or exprs_norm if you used that slot
-
-# Calculate size factors from the ORIGINAL counts (not normalized)
-# You'll need to access the original count data first
-original_data <- exprs(nanoStringData)  # Original counts
+# =========================================
+# 10.5 Normalización adicional por Size Factors
+# =========================================
+original_data <- exprs(nanoStringData)
+norm_data <- exprs(nanoStringData_norm)
 
 calculate_size_factors <- function(counts) {
-  # Función para calcular factores de tamaño estilo DESeq
-  log_counts <- log(counts)
-  log_geo_means <- rowMeans(log_counts)
-  
-  size_factors <- apply(counts, 2, function(col) {
+  log_geo_means <- rowMeans(log(counts))
+  apply(counts, 2, function(col) {
     exp(median((log(col) - log_geo_means)[is.finite(log_geo_means)]))
   })
-  
-  return(size_factors)
 }
-
 size_factors <- calculate_size_factors(original_data)
-
-# Apply size factor normalization to your ALREADY NORMALIZED data
-# Note: This applies size factors as an additional normalization step
 final_norm_data <- sweep(norm_data, 2, size_factors, "/")
 
+# Guardar matriz final normalizada
+write.csv(final_norm_data, here(sf_dir, "final_normalized_matrix.csv"), row.names = TRUE)
 # Visualization
 par(mfrow = c(1, 3), mar = c(8, 4, 4, 2))
 boxplot(log2(original_data + 1), main = "Original Data", las = 2, col = "lightblue")
@@ -935,48 +759,47 @@ boxplot(log2(final_norm_data + 1), main = "+ Size Factors", las = 2, col = "#FF6
 dev.off()
 
 
-```
+# ================================
+# 10.6 Correlation after Size Factor correction (genérico)
+# ================================
 
-7.4 **Correlation after SF**
-```{r correlation after SF correction}
+# Crear carpeta de salida si no existe
+output_dir_sf <- "Results_PostSizeFactors"
+if (!dir.exists(output_dir_sf)) dir.create(output_dir_sf)
 
 # 1. Definir clases de genes (usando la matriz corregida)
 gene_data_sf <- data.frame(
   Gene = rownames(final_norm_data),
   CodeClass = ifelse(startsWith(rownames(final_norm_data), "Endogenous_"), "Endogenous",
-           ifelse(startsWith(rownames(final_norm_data), "Negative_"), "Negative",
-           ifelse(startsWith(rownames(final_norm_data), "Positive_"), "Positive",
-           ifelse(startsWith(rownames(final_norm_data), "Housekeeping_"), "Housekeeping",
-                  "Otro")))),
+             ifelse(startsWith(rownames(final_norm_data), "Negative_"), "Negative",
+             ifelse(startsWith(rownames(final_norm_data), "Positive_"), "Positive",
+             ifelse(startsWith(rownames(final_norm_data), "Housekeeping_"), "Housekeeping",
+                    "Otro")))),
   row.names = rownames(final_norm_data)
 )
 
 # Guardar datos corregidos (batch + size factors)
-write.csv(final_norm_data, file = "datos_corregidos_sizefactors.csv", row.names = TRUE)
+write.csv(
+  final_norm_data,
+  file = file.path(output_dir_sf, "datos_corregidos_sizefactors.csv"),
+  row.names = TRUE
+)
 
-
-
-# Función para extraer el identificador corto entre los últimos dos _
+# Función para extraer identificador corto entre los últimos dos "_"
 extract_sample_id <- function(full_names) {
-  # Dividir por _ y tomar el penúltimo elemento
   sapply(strsplit(full_names, "_"), function(x) {
-    if(length(x) >= 2) {
-      return(x[length(x)-1])
-    } else {
-      return(full_names)
-    }
+    if(length(x) >= 2) return(x[length(x)-1]) else return(full_names)
   })
 }
 
-# Modificar la función analyze_gene_class_sf
+# Función principal para analizar cada clase de genes
 analyze_gene_class_sf <- function(expr_matrix, gene_annotations, gene_class, title_name) {
   
-  # Verificaciones
   if (!"CodeClass" %in% colnames(gene_annotations)) {
     stop("El dataframe gene_annotations debe contener la columna 'CodeClass'")
   }
   
-  # 1. Preparación de datos
+  # Preparación de datos
   counts_totales <- colSums(expr_matrix)
   class_genes <- rownames(gene_annotations)[gene_annotations$CodeClass == gene_class]
   class_expr <- expr_matrix[class_genes, , drop = FALSE]
@@ -984,11 +807,11 @@ analyze_gene_class_sf <- function(expr_matrix, gene_annotations, gene_class, tit
   # Acortar nombres de muestras
   short_names <- extract_sample_id(colnames(class_expr))
   
-  # 2. Boxplot de expresión por muestra
+  # Boxplot de expresión por muestra
   df_box <- as.data.frame(t(class_expr)) %>% 
     tibble::rownames_to_column("Muestra") %>% 
     mutate(MuestraShort = extract_sample_id(Muestra)) %>% 
-    pivot_longer(-c(Muestra, MuestraShort), names_to = "Gene", values_to = "Expression")
+    tidyr::pivot_longer(-c(Muestra, MuestraShort), names_to = "Gene", values_to = "Expression")
   
   p_box <- ggplot(df_box, aes(x = MuestraShort, y = Expression, fill = MuestraShort)) +
     geom_boxplot(alpha = 0.8, outlier.shape = NA) +
@@ -1004,34 +827,27 @@ analyze_gene_class_sf <- function(expr_matrix, gene_annotations, gene_class, tit
           legend.position = "none") +
     scale_fill_manual(values = color_palette)
   
-  # 3. Análisis de correlación con counts totales
+  # Correlación con counts totales
   corr_data <- data.frame(
     Sample = short_names,
     TotalCounts = counts_totales[colnames(class_expr)],
     t(class_expr)
   ) %>% 
-    pivot_longer(
-      cols = -c(Sample, TotalCounts),
-      names_to = "Gene",
-      values_to = "Expression"
-    ) %>% 
-    group_by(Gene) %>% 
-    mutate(
+    tidyr::pivot_longer(-c(Sample, TotalCounts), names_to = "Gene", values_to = "Expression") %>% 
+    dplyr::group_by(Gene) %>% 
+    dplyr::mutate(
       Correlation = cor(TotalCounts, Expression, method = "spearman"),
       Label = paste0("r = ", round(Correlation, 2))
-    ) %>% 
-    ungroup()
+    ) %>% dplyr::ungroup()
   
-  # Posiciones para etiquetas
-label_pos <- corr_data %>%
-  group_by(Gene) %>%
-  summarise(
-    Correlation = dplyr::first(Correlation),
-    Label = dplyr::first(Label),
-    TotalCounts = max(TotalCounts) * 0.7,
-    Expression = quantile(Expression, 0.8)
-  )
-
+  label_pos <- corr_data %>%
+    dplyr::group_by(Gene) %>%
+    dplyr::summarise(
+      Correlation = dplyr::first(Correlation),
+      Label = dplyr::first(Label),
+      TotalCounts = max(TotalCounts) * 0.7,
+      Expression = quantile(Expression, 0.8)
+    )
   
   p_cor <- ggplot(corr_data, aes(x = TotalCounts, y = Expression, color = Gene)) +
     geom_point(size = 3, alpha = 0.7) +
@@ -1053,13 +869,12 @@ label_pos <- corr_data %>%
     theme_bw() +
     theme(panel.grid.minor = element_blank())
   
-  # Tabla de correlaciones
+  # Tabla de correlación
   cor_table <- corr_data %>% 
-    distinct(Gene, Correlation) %>% 
-    arrange(desc(abs(Correlation))) %>% 
-    mutate(Correlation = round(Correlation, 3))
+    dplyr::distinct(Gene, Correlation) %>% 
+    dplyr::arrange(desc(abs(Correlation))) %>% 
+    dplyr::mutate(Correlation = round(Correlation, 3))
   
-  # Resultados
   list(
     boxplot = p_box,
     correlation_plot = p_cor,
@@ -1068,157 +883,61 @@ label_pos <- corr_data %>%
   )
 }
 
-
-# Ejecutar análisis para cada clase (con correlación)
+# Ejecutar análisis para cada clase de genes
 results_sf <- list(
-  positive = analyze_gene_class_sf(
-    expr_matrix = final_norm_data,
-    gene_annotations = gene_data_sf,
-    gene_class = "Positive",
-    title_name = "Controles Positivos"
-  ),
-  housekeeping = analyze_gene_class_sf(
-    expr_matrix = final_norm_data,
-    gene_annotations = gene_data_sf,
-    gene_class = "Housekeeping",
-    title_name = "Genes Housekeeping"
-  ),
-  negative = analyze_gene_class_sf(
-    expr_matrix = final_norm_data,
-    gene_annotations = gene_data_sf,
-    gene_class = "Negative",
-    title_name = "Controles Negativos"
-  )
+  positive = analyze_gene_class_sf(final_norm_data, gene_data_sf, "Positive", "Controles Positivos"),
+  housekeeping = analyze_gene_class_sf(final_norm_data, gene_data_sf, "Housekeeping", "Genes Housekeeping"),
+  negative = analyze_gene_class_sf(final_norm_data, gene_data_sf, "Negative", "Controles Negativos")
 )
 
-# Mostrar tablas de correlación en consola
+# Mostrar tablas en consola
 cat("\n=== Tabla de correlación para Controles Positivos ===\n")
 print(results_sf$positive$correlation_table)
-
 cat("\n=== Tabla de correlación para Controles Negativos ===\n")
 print(results_sf$negative$correlation_table)
-
 cat("\n=== Tabla de correlación para Genes Housekeeping ===\n")
 print(results_sf$housekeeping$correlation_table)
 
-# Cargar paquetes necesarios
+# Exportar plots y tablas a la carpeta genérica
 library(gridExtra)
 library(grid)
 library(ggplot2)
 
-# Crear objeto tabla gráfica
+# Tabla gráfica Housekeeping
 tabla_grafica <- tableGrob(results_sf$housekeeping$correlation_table)
-
-# Guardar como PNG
-png("tabla_correlacion_housekeeping.png", width = 800, height = 600)
+png(file.path(output_dir_sf, "tabla_correlacion_housekeeping.png"), width = 800, height = 600)
 grid.draw(tabla_grafica)
 dev.off()
 
+# Guardar todos los plots y tablas usando file.path()
+# Controles positivos
+ggsave(file.path(output_dir_sf, "correlation_positive_controls.png"), plot = results_sf$positive$correlation_plot, width = 8, height = 6, dpi = 300)
+ggsave(file.path(output_dir_sf, "correlation_positive_controls.pdf"), plot = results_sf$positive$correlation_plot, width = 8, height = 6)
+ggsave(file.path(output_dir_sf, "boxplot_positive_controls.png"), plot = results_sf$positive$boxplot, width = 10, height = 6, dpi = 300)
+ggsave(file.path(output_dir_sf, "boxplot_positive_controls.pdf"), plot = results_sf$positive$boxplot, width = 10, height = 6)
+write.csv(results_sf$positive$correlation_table, file.path(output_dir_sf, "correlation_table_positive_controls.csv"), row.names = FALSE)
 
-# Exportar gráficos y tablas (el mismo código anterior)
+# Controles negativos
+ggsave(file.path(output_dir_sf, "correlation_negative_controls.png"), plot = results_sf$negative$correlation_plot, width = 8, height = 6, dpi = 300)
+ggsave(file.path(output_dir_sf, "correlation_negative_controls.pdf"), plot = results_sf$negative$correlation_plot, width = 8, height = 6)
+ggsave(file.path(output_dir_sf, "boxplot_negative_controls.png"), plot = results_sf$negative$boxplot, width = 10, height = 6, dpi = 300)
+ggsave(file.path(output_dir_sf, "boxplot_negative_controls.pdf"), plot = results_sf$negative$boxplot, width = 10, height = 6)
+write.csv(results_sf$negative$correlation_table, file.path(output_dir_sf, "correlation_table_negative_controls.csv"), row.names = FALSE)
 
-
-# 4. Exportar gráficos adicionales de correlación
-# a) Controles positivos
-ggsave(
-  filename = "Results_PostSizeFactors/correlation_positive_controls.png",
-  plot = results_sf$positive$correlation_plot,
-  width = 8, height = 6, dpi = 300
-)
-
-ggsave(
-  filename = "Results_PostSizeFactors/correlation_positive_controls.pdf",
-  plot = results_sf$positive$correlation_plot,
-  width = 8, height = 6
-)
-
-# b) Controles negativos
-ggsave(
-  filename = "Results_PostSizeFactors/correlation_negative_controls.png",
-  plot = results_sf$negative$correlation_plot,
-  width = 8, height = 6, dpi = 300
-)
-
-ggsave(
-  filename = "Results_PostSizeFactors/correlation_negative_controls.pdf",
-  plot = results_sf$negative$correlation_plot,
-  width = 8, height = 6
-)
-
-# c) Genes housekeeping
-ggsave(
-  filename = "Results_PostSizeFactors/correlation_housekeeping_genes.png",
-  plot = results_sf$housekeeping$correlation_plot,
-  width = 10, height = 6, dpi = 300
-)
-
-ggsave(
-  filename = "Results_PostSizeFactors/correlation_housekeeping_genes.pdf",
-  plot = results_sf$housekeeping$correlation_plot,
-  width = 10, height = 6
-)
-
-# Crear carpeta si no existe
-if (!dir.exists("Results_PostSizeFactors")) dir.create("Results_PostSizeFactors")
-
-# a) Controles positivos
-ggsave(
-  filename = "Results_PostSizeFactors/boxplot_positive_controls.png",
-  plot = results_sf$positive$boxplot,
-  width = 10, height = 6, dpi = 300
-)
-
-ggsave(
-  filename = "Results_PostSizeFactors/boxplot_positive_controls.pdf",
-  plot = results_sf$positive$boxplot,
-  width = 10, height = 6
-)
-
-# b) Controles negativos
-ggsave(
-  filename = "Results_PostSizeFactors/boxplot_negative_controls.png",
-  plot = results_sf$negative$boxplot,
-  width = 10, height = 6, dpi = 300
-)
-
-ggsave(
-  filename = "Results_PostSizeFactors/boxplot_negative_controls.pdf",
-  plot = results_sf$negative$boxplot,
-  width = 10, height = 6
-)
-
-# c) Genes housekeeping
-ggsave(
-  filename = "Results_PostSizeFactors/boxplot_housekeeping_genes.png",
-  plot = results_sf$housekeeping$boxplot,
-  width = 10, height = 6, dpi = 300
-)
+# Genes Housekeeping
+ggsave(file.path(output_dir_sf, "correlation_housekeeping_genes.png"), plot = results_sf$housekeeping$correlation_plot, width = 10, height = 6, dpi = 300)
+ggsave(file.path(output_dir_sf, "correlation_housekeeping_genes.pdf"), plot = results_sf$housekeeping$correlation_plot, width = 10, height = 6)
+ggsave(file.path(output_dir_sf, "boxplot_housekeeping_genes.png"), plot = results_sf$housekeeping$boxplot, width = 10, height = 6, dpi = 300)
+write.csv(results_sf$housekeeping$correlation_table, file.path(output_dir_sf, "correlation_table_housekeeping_genes.csv"), row.names = FALSE)
+``` 
 
 
-# 5. Exportar tablas de correlación
-write.csv(
-  results_sf$positive$correlation_table,
-  file = "Results_PostSizeFactors/correlation_table_positive_controls.csv",
-  row.names = FALSE
-)
-
-write.csv(
-  results_sf$negative$correlation_table,
-  file = "Results_PostSizeFactors/correlation_table_negative_controls.csv",
-  row.names = FALSE
-)
-
-write.csv(
-  results_sf$housekeeping$correlation_table,
-  file = "Results_PostSizeFactors/correlation_table_housekeeping_genes.csv",
-  row.names = FALSE
-)
-
-```
-
-
-8. **Batch Effect**
 ```{r Batch Effect}
+# ----------------------------
+# 11. Batch Effect 
+# ----------------------------
+
+# Cargar paquetes necesarios
 pacman::p_load(
   ggplot2, 
   ggrepel,
@@ -1229,108 +948,71 @@ pacman::p_load(
   variancePartition,
   dplyr,
   reshape2,
-  NanoStringNCTools,
-  gridExtra
+  Biobase,
+  gridExtra,
+  patchwork
 )
 
 # Configurar directorio de salida
 output_dir <- "batch_effect_analysis"
-if (!dir.exists(output_dir)) {
-  dir.create(output_dir)
-}
+if (!dir.exists(output_dir)) dir.create(output_dir)
 
-# ----------------------------
-# 2. Preparación de metadatos
-# ----------------------------
-
-cat("Preparando metadatos...\n")
-
-# Verificar datos de entrada
-if (!exists("final_norm_data")) {
-  stop("Error: No se encontró el objeto 'final_norm_data'.")
-}
-
-# Extraer matriz de expresión
+# Extraer matriz de expresión (ExpressionSet o data frame/matrix)
 expr_matrix <- if (is(final_norm_data, "ExpressionSet")) {
   Biobase::exprs(final_norm_data)
 } else {
   as.matrix(final_norm_data)
 }
 
-# Limpiar nombres de muestras
-clean_sample_names <- gsub("^_GEM_", "", colnames(expr_matrix))
+# Limpiar nombres de muestra
+clean_sample_names <- colnames(expr_matrix)
 
-# Crear metadatos
+# Crear metadatos genéricos
+# Ajusta si tienes columnas de batch o tipo conocidas
 metadata <- data.frame(
   SampleID = clean_sample_names,
-  OriginalID = colnames(expr_matrix),
-  Batch = factor(case_when(
-    grepl("RunA", clean_sample_names) ~ "RunA",
-    grepl("RunB", clean_sample_names) ~ "RunB",
-    grepl("RunC", clean_sample_names) ~ "RunC",
-    TRUE ~ NA_character_
-  )),
-  Type = factor(ifelse(grepl("Stand", clean_sample_names), "Standard", "Sample")),
-  row.names = colnames(expr_matrix),
-  stringsAsFactors = FALSE
+  OriginalID = clean_sample_names,
+  Batch = factor(rep("Batch1", ncol(expr_matrix))),  # Temporal: todos en mismo batch
+  Type = factor(rep("Sample", ncol(expr_matrix))),
+  row.names = clean_sample_names
 )
 
-# Guardar metadatos
 write.csv(metadata, file.path(output_dir, "metadata.csv"))
+```
 
+```{r exploratory analysis}
 # ----------------------------
-# 3. Análisis exploratorio
+# 12. Análisis exploratorio
 # ----------------------------
 
-cat("\nRealizando análisis exploratorio...\n")
-
-# Configuración visual
-batch_colors <- c(RunA = "#FF66B2",  # Rosa
-                 RunB = "#CC99FF",    # Lila
-                 RunC = "#66B2FF")    # Azul claro
-
-## 3.1 PCA ##
-sample_idx <- metadata$Type == "Sample"
-expr_samples <- expr_matrix[, sample_idx]
-batch_samples <- metadata$Batch[sample_idx]
-
-pca_result <- prcomp(t(expr_samples), scale. = TRUE)
+# PCA
+pca_result <- prcomp(t(expr_matrix), scale. = TRUE)
 pca_vars <- round(100 * pca_result$sdev^2 / sum(pca_result$sdev^2), 1)
 
 pca_data <- data.frame(
   PC1 = pca_result$x[,1],
   PC2 = pca_result$x[,2],
-  Batch = batch_samples,
-  Sample = metadata$SampleID[sample_idx]
+  Sample = clean_sample_names
 )
 
-pca_plot <- ggplot(pca_data, aes(x = PC1, y = PC2, color = Batch)) +
+pca_plot <- ggplot(pca_data, aes(x = PC1, y = PC2, label = Sample)) +
   geom_point(size = 3, alpha = 0.8) +
-  scale_color_manual(values = batch_colors) +
+  geom_text_repel(size = 3) +
   labs(
-    title = "Análisis PCA por lote",
+    title = "PCA de todas las muestras",
     x = paste0("PC1 (", pca_vars[1], "%)"),
     y = paste0("PC2 (", pca_vars[2], "%)")
   ) +
-  theme_minimal() +
-  theme(legend.position = "bottom")
+  theme_minimal()
 
 ggsave(file.path(output_dir, "pca_plot.png"), pca_plot, width = 10, height = 8)
 
-## 3.2 Heatmap de correlación ##
-gene_vars <- rowVars(expr_samples)
-expr_filtered <- expr_samples[gene_vars > quantile(gene_vars, 0.75), ]
-
-cor_matrix <- cor(expr_filtered, use = "complete.obs")
-rownames(cor_matrix) <- colnames(cor_matrix) <- metadata$SampleID[sample_idx]
-
-annotation_df <- data.frame(Batch = batch_samples)
-rownames(annotation_df) <- colnames(expr_filtered)
+# Heatmap de correlación
+cor_matrix <- cor(expr_matrix, use = "complete.obs")
+rownames(cor_matrix) <- colnames(cor_matrix) <- clean_sample_names
 
 heatmap_plot <- pheatmap(
   cor_matrix,
-  annotation_col = annotation_df,
-  annotation_colors = list(Batch = batch_colors),
   color = colorRampPalette(rev(brewer.pal(9, "RdBu")))(100),
   main = "Matriz de correlación entre muestras",
   show_rownames = TRUE,
@@ -1340,208 +1022,87 @@ heatmap_plot <- pheatmap(
   filename = file.path(output_dir, "correlation_heatmap.png")
 )
 
-## 3.3 Boxplots de expresión ##
+# Boxplot de expresión de muestra (subset de genes si es necesario)
 set.seed(123)
-selected_genes <- sample(1:nrow(expr_samples), min(50, nrow(expr_samples)))
-expr_melted <- reshape2::melt(expr_samples[selected_genes, ])
-expr_melted$Batch <- rep(batch_samples, each = length(selected_genes))
+n_genes <- min(50, nrow(expr_matrix))
+expr_subset <- expr_matrix[sample(1:nrow(expr_matrix), n_genes), ]
+expr_melted <- reshape2::melt(expr_subset)
+expr_melted$Sample <- rep(clean_sample_names, each = n_genes)
 
-boxplot <- ggplot(expr_melted, aes(x = Batch, y = value, fill = Batch)) +
-  geom_boxplot(outlier.size = 0.5) +
-  scale_fill_manual(values = batch_colors) +
-  labs(
-    title = "Distribución de expresión por lote",
-    subtitle = paste(length(selected_genes), "genes seleccionados aleatoriamente"),
-    y = "Nivel de expresión (normalizado)"
-  ) +
+boxplot <- ggplot(expr_melted, aes(x = Sample, y = value)) +
+  geom_boxplot(outlier.size = 0.5, fill = "steelblue") +
+  labs(title = paste("Distribución de expresión de", n_genes, "genes seleccionados")) +
   theme_minimal() +
-  coord_cartesian(ylim = quantile(expr_melted$value, c(0.05, 0.95)))
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
 
-ggsave(file.path(output_dir, "expression_boxplots.png"), boxplot, width = 8, height = 6)
+ggsave(file.path(output_dir, "expression_boxplots.png"), boxplot, width = 10, height = 6)
+
 
 # ----------------------------
-# 4. Análisis estadístico
+# 12.1 Análisis estadístico limma 
 # ----------------------------
 
-cat("\nRealizando análisis estadístico...\n")
-
-## 4.1 Análisis con limma ##
-design <- model.matrix(~ 0 + batch_samples)
-colnames(design) <- levels(batch_samples)
-
-fit <- lmFit(expr_samples, design) |> eBayes()
+# Temporal: todos en un batch, ajuste genérico
+design <- model.matrix(~ 1, data = metadata)
+fit <- lmFit(expr_matrix, design) |> eBayes()
 batch_results <- topTable(fit, number = Inf, sort.by = "none")
 
 pval_plot <- ggplot(batch_results, aes(x = P.Value)) +
-  geom_histogram(bins = 30, fill = "steelblue", boundary = 0) +
-  labs(
-    title = "Distribución de p-valores para efecto de lote",
-    x = "p-valor",
-    y = "Frecuencia"
-  ) +
+  geom_histogram(bins = 30, fill = "steelblue") +
+  labs(title = "Distribución de p-valores (batch effect)") +
   theme_minimal()
-
 ggsave(file.path(output_dir, "pvalue_distribution.png"), pval_plot, width = 8, height = 6)
 
-## 4.2 Análisis de componentes de varianza ##
-var_part <- fitExtractVarPartModel(
-  expr_samples[1:min(100, nrow(expr_samples)), ],
-  ~ (1|Batch),
-  metadata[sample_idx, ]
-)
 
-variance_summary <- data.frame(
-  Source = c("Batch", "Residual"),
-  Variance = c(mean(var_part$Batch), mean(var_part$Residual))
-) |>
-  mutate(Percentage = round(100 * Variance / sum(Variance), 1))
-
-print(batch_results)
-
-write.csv(variance_summary, file.path(output_dir, "variance_components.csv"))
-```
-
-9. **KDE Plot después de normalización y estadarización**
-```{r KDE Plot: After batch}
-
-## 1. Preparar los datos corregidos en formato largo
-exprs_long_corrected <- final_norm_data %>% 
-  as.data.frame() %>% 
+# ----------------------------
+# 12.2 KDE Plot post-normalización
+# ----------------------------
+exprs_long <- as.data.frame(expr_matrix) %>% 
   tibble::rownames_to_column("Gene") %>% 
   pivot_longer(-Gene, names_to = "Sample", values_to = "Expression")
 
-## 2. Definir muestras a incluir (ajusta con tus muestras reales)
-included_samples <- c("20220215_IO360melRunC_GEM36_06.RCC", 
-                     "20210316_IO360melRunA_GEM4_03.RCC", 
-                     "20210316_IO360melRunA_GEM17_09.RCC", 
-                     "20210316_IO360melRunA_GEM12_06.RCC")
-
-## 3. Filtrar los datos
-exprs_included <- exprs_long_corrected %>% 
-  filter(Sample %in% included_samples)
-
-all_samples <- exprs_long_corrected
-
-
-# Versión mejorada con más opciones visuales
-plot_included <- ggplot(exprs_included, aes(x = Expression, color = Sample)) +
+kde_plot <- ggplot(exprs_long, aes(x = Expression, color = Sample)) +
   geom_density(linewidth = 1, alpha = 0.7) +
-  scale_x_continuous(limits = c(-500, 1500)) +
-  geom_rug(alpha = 0.3) +  # Muestra puntos individuales  
-  labs(title = "Muestras problemáticas (post-SFactors)",
-       x = "Expresión normalizada",
-       y = "Densidad") +
-  theme_minimal(base_size = 12) +
-  theme(legend.position = "right",
-        plot.title = element_text(face = "bold"))
+  geom_rug(alpha = 0.3) +
+  labs(title = "Distribución de expresión post-normalización", x = "Expresión", y = "Densidad") +
+  theme_minimal()
 
+ggsave(file.path(output_dir, "KDE_post_sf.png"), kde_plot, width = 12, height = 8)
 
-plot_excluded <- ggplot(all_samples, aes(x = Expression, color = Sample)) +
-  geom_density(linewidth = 1, alpha = 0.7) +
-  scale_x_continuous(limits = c(-500, 1500)) +
-  geom_rug(alpha = 0.3) +  # Muestra puntos individuales
-  labs(title = "Todas las muestras (post-SFactors)",
-       x = "Expresión normalizada",
-       y = "Densidad") +
-  theme_minimal(base_size = 12) +
-    theme(legend.position = "none",
-        plot.title = element_text(face = "bold"))
-
-# Combinar con diseño vertical
-combined_plot <- plot_included / plot_excluded +
-  plot_annotation(
-    title = "Control de Calidad Post-Corrección",
-    subtitle = "Distribución de expresión génica normalizada",
-    caption = "Datos normalizados por SizeFactors"
-  )
-
-print(combined_plot)
-
-ggsave("KDE_post_sf.png", 
-       plot = combined_plot,
-       width = 15, 
-       height = 10,
-       dpi = 300)
-```
-
-
-
-**Análisis de outliers**
-```{r}
-# Verificar datos de entrada
-if (!exists("final_norm_data")) {
-  stop("Error: No se encontró el objeto 'final_norm_data'.")
-}
-
-# Extraer matriz de expresión
-expr_matrix <- if (is(final_norm_data, "ExpressionSet")) {
-  Biobase::exprs(final_norm_data)
-} else {
-  as.matrix(final_norm_data)
-}
-
-# Limpiar nombres de muestras (se mantiene para referencia)
-clean_sample_names <- gsub("^_GEM_", "", colnames(expr_matrix)) 
-
-# Calcular matriz de correlación Spearman
+# ----------------------------
+# 12.3 Outliers 
+# ----------------------------
 cor_matrix <- cor(expr_matrix, method = "spearman")
-rownames(cor_matrix) <- clean_sample_names
-colnames(cor_matrix) <- clean_sample_names
-
-# 1. DEFINIR THRESHOLD DE OUTLIERS (ajustable)
-cor_threshold <- 0.6 #(típico: 0.6-0.8)
-
-# 2. Análisis de clusters
-hc <- hclust(as.dist(1-cor_matrix))
-num_clusters <- 3
-clusters <- cutree(hc, k = num_clusters)
-
-# 3. Identificación de outliers
-mean_cor <- apply(cor_matrix, 1, mean)
+mean_cor <- rowMeans(cor_matrix)
+cor_threshold <- 0.6
 outlier_flag <- ifelse(mean_cor < cor_threshold, "Outlier", "Normal")
 
-# 4. Preparar anotaciones
 annotation_df <- data.frame(
   Mean_Correlation = mean_cor,
-  Status = outlier_flag,
-  Cluster = as.factor(clusters))
+  Status = outlier_flag
+)
 rownames(annotation_df) <- clean_sample_names
 
-# 5. Visualización sin nombres de muestra
-library(pheatmap)
-library(RColorBrewer)
-
-heatmap_colors <- colorRampPalette(brewer.pal(9, "YlOrRd"))(100)
-
-# === HEATMAP DE CORRELACIÓN ===
-png("Heatmap_Correlacion_Spearman.png", width = 1200, height = 1000)
 pheatmap(cor_matrix,
-         color = heatmap_colors,
-         clustering_distance_rows = as.dist(1 - cor_matrix),
-         clustering_distance_cols = as.dist(1 - cor_matrix),
-         cutree_rows = num_clusters,
-         cutree_cols = num_clusters,
+         color = colorRampPalette(brewer.pal(9, "YlOrRd"))(100),
          annotation_row = annotation_df,
          annotation_col = annotation_df,
          show_rownames = TRUE,
          show_colnames = FALSE,
          fontsize = 8,
-         main = paste("Correlación Spearman | Outliers (cor <", cor_threshold, ")"))
-dev.off()
+         main = paste("Correlación Spearman | Outliers (cor <", cor_threshold, ")"),
+         filename = file.path(output_dir, "Heatmap_Correlacion_Spearman.png"))
 
-# === HISTOGRAMA DE CORRELACIONES PROMEDIO ===
-png("Histograma_Correlaciones_Promedio.png", width = 1000, height = 800)
+# Histograma de correlaciones promedio
+png(file.path(output_dir, "Histograma_Correlaciones_Promedio.png"), width = 1000, height = 800)
 hist(mean_cor, breaks = 30, col = "lightblue",
-     main = "Distribución de Correlaciones Promedio",
-     xlab = "Correlación Promedio",
-     ylab = "Frecuencia")
+     main = "Distribución de correlaciones promedio",
+     xlab = "Correlación promedio", ylab = "Frecuencia")
 abline(v = cor_threshold, col = "red", lty = 2)
-legend("topright", legend = paste("Threshold =", cor_threshold), col = "red", lty = 2)
 dev.off()
-
-
 
 
 ```
+
 
 
