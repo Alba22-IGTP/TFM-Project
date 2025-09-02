@@ -5,8 +5,7 @@ Los resultados sientan las bases para el desarrollo de modelos predictivos basad
 
 En este proyecto de fin de Máster en Bioinformática se han seguido varios pasos, que quedan recogidos en diferentes scripts:
 
-1. Control de calidad, normalización de los datos y filtrado de muestras: Nanostring_QC_Norm.Rmd
-   Para ejecutar este scrip debes tener una carpeta data/Rawdata/ que incluya los archivos .RCC, el archivo NS_xxx.rlf y el archivo NS_xxx.csv (no proporcionados dado que los datos aun no han sido publicados).
+1. Control de calidad, normalización de los datos y filtrado de muestras: Nanostring_QC_Norm.Rmd. Para ejecutar este scrip debes tener una carpeta data/Rawdata/ que incluya los archivos .RCC, el archivo NS_xxx.rlf y el archivo NS_xxx.csv (no proporcionados dado que los datos aun no han sido publicados).
    
 3. Representación de la expresión génica (mediante heatmap) de las muestras finales tras normalizar: Heatmap_After_SF.Rmd
 4. Datos clínicos de las muestras: Caracteristicas_clin.Rmd
