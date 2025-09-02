@@ -1,12 +1,13 @@
 ---
 title: "Características clínicas"
-author: "Alba de la Puente Noël"
+author: "xxx"
 date: "2025-05-08"
 output: html_document
 ---
 
+
 ```{r setup}
-# Cargar las librerías necesarias
+# Librerías necesarias
 library(tidyverse)
 library(limma)
 library(EnhancedVolcano)
@@ -14,414 +15,124 @@ library(clusterProfiler)
 library(org.Hs.eg.db)
 library(ggplot2)
 library(pheatmap)
+library(gtsummary)
+library(gt)
+library(survival)
+library(survminer)
 
-db_completa_log2 <- read_csv("C:/Users/adelapuente/Desktop/TFM/Nanostring/Datos finales/db_completa_log2.csv")
+# Crear carpetas de salida
+if(!dir.exists("Resultados")) dir.create("Resultados")
 
-# Asegúrate de que sea un data.frame
+# Cargar base de datos log2
+db_completa_log2 <- read_csv("Datos_finales/db_completa_log2.csv")
 db_completa_log2 <- as.data.frame(db_completa_log2)
 
-# Convertir columnas de fecha usando el formato adecuado
-db_completa_log2$fecha_diagnostico <- as.Date(db_completa_log2$fecha_diagnostico, format = "%d/%m/%Y")
-db_completa_log2$progresion_date <- as.Date(db_completa_log2$progresion_date, format = "%d/%m/%Y")
-db_completa_log2$exitus_or_last_control <- as.Date(db_completa_log2$exitus_or_last_control, format = "%d/%m/%Y")
-db_completa_log2$inicio_first_line <- as.Date(db_completa_log2$inicio_first_line, format = "%d/%m/%Y")
+# Convertir fechas
+fechas <- c("fecha_diagnostico", "progresion_date", "exitus_or_last_control", "inicio_first_line")
+db_completa_log2[fechas] <- lapply(db_completa_log2[fechas], function(x) as.Date(x, format="%d/%m/%Y"))
 
-# Inicializar las columnas con NA
+# Calcular TLP y SG (meses)
 TLP <- rep(NA, nrow(db_completa_log2))
-SG <- rep(NA, nrow(db_completa_log2))
-
-# Calcular solo si no hay NA
+SG  <- rep(NA, nrow(db_completa_log2))
 valid_pfs <- !is.na(db_completa_log2$inicio_first_line) & !is.na(db_completa_log2$progresion_date)
-TLP[valid_pfs] <- round(
-  as.numeric(db_completa_log2$progresion_date[valid_pfs] - db_completa_log2$inicio_first_line[valid_pfs]) / 30.44, 1
-)
-
+TLP[valid_pfs] <- round(as.numeric(db_completa_log2$progresion_date[valid_pfs]-db_completa_log2$inicio_first_line[valid_pfs])/30.44,1)
 valid_os <- !is.na(db_completa_log2$fecha_diagnostico) & !is.na(db_completa_log2$exitus_or_last_control)
-SG[valid_os] <- round(
-  as.numeric(db_completa_log2$exitus_or_last_control[valid_os] - db_completa_log2$fecha_diagnostico[valid_os]) / 30.44, 1
-)
+SG[valid_os] <- round(as.numeric(db_completa_log2$exitus_or_last_control[valid_os]-db_completa_log2$fecha_diagnostico[valid_os])/30.44,1)
 
-# Insertar en columnas 24 y 25
-db_completa_log2 <- cbind(
-  db_completa_log2[, 1:32],
-  TLP = TLP,
-  SG = SG,
-  db_completa_log2[, 33:ncol(db_completa_log2)]
-)
+db_completa_log2$TLP <- TLP
+db_completa_log2$SG  <- SG
 
-
-# 2. Extraer matriz de expresión
+# Crear matriz de expresión
 expression_matrix <- db_completa_log2 %>%
-  # Seleccionar columnas manteniendo IDs
-  dplyr::select(ID, starts_with("Endogenous_")) %>%
-  # Convertir a matriz (sin problemas con spec_tbl_df)
-  as.data.frame() %>% 
-  column_to_rownames("ID") %>% 
-  t() %>%  # Transponer para genes x muestras
+  select(ID, starts_with("Endogenous_")) %>%
+  column_to_rownames("ID") %>%
   as.matrix()
 
-# Verificar estructura
-print(dim(expression_matrix)) # [genes, muestras]
-print(expression_matrix[1:5, 1:5]) # Visualizar parte
+# Eliminar muestras opcionales (ejemplo sample12)
+expression_matrix <- expression_matrix[, !colnames(expression_matrix) %in% "sample12"]
 
-# Eliminar GEM12
-expression_matrix <- expression_matrix[, !colnames(expression_matrix) %in% "GEM12"]
-
-
-
-# 4. Preparar metadatos 
+# Preparar metadata
 metadata <- db_completa_log2 %>%
-  dplyr::select(ID, grupo, clinical_benefit, sexo, edad_diagnostico, estado_actual_binary, LDH_basal, Breslow, Clark, Ulceracion, TLP, SG) %>%
+  select(ID, grupo, clinical_benefit, sexo, edad_diagnostico, estado_actual_binary, LDH_basal,
+         Breslow, Clark, Ulceracion, TLP, SG) %>%
   filter(ID %in% colnames(expression_matrix)) %>%
-  mutate(
-    grupo = factor(grupo, levels = c("BRAF_MEK", "ITH")),
-    clinical_benefit = factor(clinical_benefit, levels = c("low", "high"))
-  ) %>%
+  mutate(grupo = factor(grupo, levels=c("BRAF_MEK","ITH")),
+         clinical_benefit = factor(clinical_benefit, levels=c("low","high"))) %>%
   column_to_rownames("ID")
- 
-dim(metadata)
-dim(expression_matrix)
 
-# Transpose expression_log (samples as rows, genes as columns)
-expression_log_t <- t(expression_matrix)  
+# Transponer expresión (samples x genes)
+expression_log_t <- t(expression_matrix)
 
-# Now dimensions should match:
-dim(metadata)      
-dim(expression_log_t)    
+# Combinar metadata + expresión
+db_final <- cbind(metadata, expression_log_t) %>%
+  tibble::rownames_to_column(var="ID")
 
-# Combine them
-db_final <- cbind(metadata, expression_log_t)  
-db_final <- db_final %>% 
-  tibble::rownames_to_column(var = "ID")
-
-
-View(db_final)
 
 
 ```
 
-
-
-```{r Caracteristicas clínicas}
-
-library(gtsummary)
-library(dplyr)
-library(gt)
-
-
-# 1. Preparación de datos
+```{r Caracteristicas_clinicas}
+# Preparar tabla de características clínicas
 db_clin <- db_final %>%
   select(-starts_with("Endogenous_")) %>%
   mutate(
-    # Limpieza de datos
-    across(where(is.character), ~na_if(., "Unknown")),  # Convertir "Unknown" a NA
-    
-    # Factores con etiquetas
-    sexo = factor(sexo, levels = c("H", "M"), labels = c("Hombre", "Mujer")),
-    edad_cat = factor(ifelse(edad_diagnostico < 60, "<60", "≥60"), levels = c("<60", "≥60")),
-    grupo = factor(grupo, 
-                  levels = c("BRAF_MEK", "ITH"),
-                  labels = c("Terapia dirigida (BRAF/MEK)", "Inmunoterapia")),
-    
-    # Otras variables
-    clinical_benefit = factor(clinical_benefit, levels = c("low", "high"), labels = c("Bajo", "Alto")),
-    LDH_cat = factor(case_when(
-      LDH_basal < 300 ~ "<300 U/I",
-      LDH_basal >= 300 ~ "≥300 U/I",
-      TRUE ~ "N/V"
-    )),
-    ulceracion = factor(Ulceracion, levels = c("SI", "NO"), labels = c("Sí", "No")),
-    Breslow_cat = factor(case_when(
-      Breslow >= 1 & Breslow <= 4 ~ "1-4 mm",
-      Breslow > 4 ~ ">4 mm",
-      TRUE ~ "N/V"
-    )),
-    
-    # Variables continuas
+    across(where(is.character), ~na_if(., "Unknown")),
+    sexo = factor(sexo, levels=c("H","M"), labels=c("Hombre","Mujer")),
+    edad_cat = factor(ifelse(edad_diagnostico<60,"<60","≥60"),levels=c("<60","≥60")),
+    grupo = factor(grupo, levels=c("BRAF_MEK","ITH"),
+                   labels=c("Terapia dirigida (BRAF/MEK)","Inmunoterapia")),
+    clinical_benefit = factor(clinical_benefit, levels=c("low","high"), labels=c("Bajo","Alto")),
+    LDH_cat = factor(case_when(LDH_basal<300~"<300 U/I", LDH_basal>=300~"≥300 U/I", TRUE~"N/V")),
+    ulceracion = factor(Ulceracion, levels=c("SI","NO"), labels=c("Sí","No")),
+    Breslow_cat = factor(case_when(Breslow>=1 & Breslow<=4 ~ "1-4 mm", Breslow>4 ~ ">4 mm", TRUE~"N/V")),
     TLP = ifelse(is.na(TLP), NA_real_, TLP),
-    SG = ifelse(is.na(SG), NA_real_, SG)
+    SG  = ifelse(is.na(SG), NA_real_, SG)
   )
 
-# 2. Crear tabla unificada
+# Tabla resumen con gtsummary
 tabla_final <- db_clin %>%
   tbl_summary(
     by = grupo,
-    include = c(sexo, edad_cat, estado_actual_binary, clinical_benefit, LDH_cat, Breslow_cat, Clark, ulceracion, TLP, SG),
-    label = list(
-      sexo ~ "Sexo",
-      edad_cat ~ "Edad",
-      estado_actual_binary ~ "Supervivencia",
-      clinical_benefit ~ "Beneficio clínico",
-      LDH_cat ~ "LDH (U/I)",
-      Breslow_cat ~ "Breslow (mm)",
-      Clark ~ "Nivel de Clark",
-      ulceracion ~ "Ulceración",
-      TLP ~ "Tiempo libre de progresión (meses)",
-      SG ~ "Supervivencia global (meses)"
-    ),
-    statistic = list(
-      all_categorical() ~ "{n} ({p}%)",
-      all_continuous() ~ "{median} ({min}-{max})"
-    ),
-    digits = list(
-      all_categorical() ~ c(0, 1),
-      all_continuous() ~ 1
-    ),
-    missing_text = "N/V"
+    include=c(sexo, edad_cat, estado_actual_binary, clinical_benefit, LDH_cat,
+              Breslow_cat, Clark, ulceracion, TLP, SG)
   ) %>%
   add_p() %>%
-  modify_header(
-    label ~ "**Variable**",
-    all_stat_cols() ~ "**{level}**\nN = {n}"
-  ) %>%
-  modify_caption("**Tabla 1. Características clínicas y resultados por tipo de tratamiento**") %>%
-  modify_footnote(
-    all_stat_cols() ~ "n (%); Mediana (Rango)",
-    p.value ~ "Prueba exacta de Fisher para categóricas, Wilcoxon para continuas"
-  ) %>%
   bold_labels()
 
-# 3. Convertir a gt y aplicar estilos finales
-tabla_gt <- as_gt(tabla_final) %>%
-  tab_style(
-    style = cell_fill(color = "#E0E0E0"),
-    locations = cells_column_labels()
-  ) %>%
-  # Ajustar ancho de columnas
-  cols_width(
-    label ~ px(180),
-    everything() ~ px(180)
-  )
-
-# Mostrar tabla
-tabla_gt
-
-# Guardar la tabla como imagen PNG
-gtsave(tabla_gt, "tabla_caracteristicas.png", vwidth = 1500, vheight = 1000, zoom = 2)
-
+# Guardar como PNG
+tabla_gt <- as_gt(tabla_final)
+gtsave(tabla_gt, file = "Resultados/tabla_caracteristicas.png", vwidth=1500,vheight=1000,zoom=2)
 
 ```
 
 
-```{r curbas kaplan-meier}
-
-library(survival)
-library(survminer)
-library(ggplot2)
-
-## 1. Curva de Supervivencia Global Mejorada ----
-  curva_SG <- ggsurvplot(
-  survfit(Surv(SG, !is.na(SG)) ~ grupo, 
-          data = db_final %>% 
-            mutate(grupo = factor(grupo, 
-                                levels = c("BRAF_MEK", "ITH"),
-                                labels = c("Terapia dirigida", "Inmunoterapia")))),
-  
-  
-  # Configuración estética
-  palette = c("purple", "#2E9FDF"),  # Azul acero y Coral
-  conf.int = TRUE,
-  conf.int.alpha = 0.1,  # Sombreado más claro
-  risk.table = TRUE,
-  risk.table.y.text = FALSE,
-  
-  # Personalización de textos
-  legend.title = "Tratamiento",
-  legend.labs = c("Terapia dirigida", "Inmunoterapia"),
-  title = "Curva de Supervivencia Global",
-  xlab = "Meses",
-  ylab = "Probabilidad de Supervivencia",
-  
-  # Configuración de la tabla de riesgo
-  risk.table.title = "Pacientes en riesgo",
-  tables.theme = theme_cleantable(),
-  
-  # Eliminar log-rank test
-  pval = FALSE,
-  
-  # Tema general
-  ggtheme = theme_minimal() +
-    theme(
-      plot.title = element_text(face = "bold", hjust = 0.5),
-      legend.position = "right")
-)
-
-# Modificar la tabla de riesgo manualmente
-curva_SG$table <- curva_SG$table +
-  labs(x = "Meses", y = "") +  # Cambiar "strata" por "Meses"
-  theme(
-    plot.title = element_text(face = "bold"),
-    axis.title.x = element_text(face = "bold")
+```{r Kaplan-Meier}
+# Función genérica para curvas Kaplan-Meier
+crear_curva <- function(db, tiempo, grupo_col, nombre_archivo, palette=c("purple","#2E9FDF"), xlim=NULL){
+  curva <- ggsurvplot(
+    survfit(Surv(get(tiempo), !is.na(get(tiempo))) ~ get(grupo_col), 
+            data = db),
+    palette = palette,
+    conf.int=TRUE, conf.int.alpha=0.1,
+    risk.table=TRUE, risk.table.y.text=FALSE,
+    legend.title="Grupo",
+    title=paste0("Curva de ", tiempo),
+    xlab="Meses", ylab="Probabilidad",
+    tables.theme = theme_cleantable(),
+    ggtheme = theme_minimal() + theme(plot.title=element_text(face="bold",hjust=0.5))
   )
+  ggsave(paste0("Resultados/",nombre_archivo), plot=print(curva), width=10, height=7, dpi=300)
+  return(curva)
+}
 
-# Guardar la curva
-ggsave("curva_SG_mejorada.png", 
-       plot = print(curva_SG), 
-       width = 8, height = 7, dpi = 300)
+# Curvas principales
+curva_SG  <- crear_curva(db_final, "SG", "grupo", "curva_SG_mejorada.png")
+curva_TLP <- crear_curva(db_final, "TLP", "grupo", "curva_TLP_mejorada.png")
 
-
-
-
-
-## 2. Curva de Tiempo Libre de Progresión ----
-# (Mismos ajustes pero para TLP)
-curva_TLP <- ggsurvplot(
-  survfit(Surv(TLP, !is.na(TLP)) ~ grupo, 
-          data = db_final %>% 
-            mutate(grupo = factor(grupo, 
-                                levels = c("BRAF_MEK", "ITH"),
-                                labels = c("Terapia dirigida", "Inmunoterapia")))),
-  
-  xlim = c(0, 65),
-  
-
-  # Configuración estética
-  palette = c("purple", "#2E9FDF"),  # Azul acero y Coral
-  conf.int = TRUE,
-  conf.int.alpha = 0.1,  # Sombreado más claro
-  risk.table = TRUE,
-  risk.table.y.text = FALSE,
-  
-  # Personalización de textos
-  legend.title = "Tratamiento",
-  legend.labs = c("Terapia dirigida", "Inmunoterapia"),
-  title = "Curva de Tiempo Libre de Progresión",
-  xlab = "Meses",
-  ylab = "Probabilidad de Supervivencia",
-  
-  # Configuración de la tabla de riesgo
-  risk.table.title = "Pacientes en riesgo",
-  tables.theme = theme_cleantable(),
-  
-  # Eliminar log-rank test
-  pval = FALSE,
-  
-    # Tema general
-  ggtheme = theme_minimal() +
-    theme(
-      plot.title = element_text(face = "bold", hjust = 0.5),
-      legend.position = "right")
-)
-  
-
-# Modificar tabla de riesgo
-curva_TLP$table <- curva_TLP$table +
-  labs(x = "Meses", y = "") +
-  theme(
-    plot.title = element_text(face = "bold"),
-    axis.title.x = element_text(face = "bold")
-  )
-
-# Guardar curva TLP
-ggsave("curva_TLP_mejorada.png", 
-       plot = print(curva_TLP), 
-       width = 10, height = 7, dpi = 300)
 ```
 
-```{r}
-
-library(survival)
-library(survminer)
-library(dplyr)
-library(ggplot2)
-
-# Asegúrate de que los ID son tipo carácter si hay algún riesgo de problemas de tipo
-db_final$ID <- as.character(db_final$ID)
-
-# Forzar clasificación manual
-db_final <- db_final %>%
-  mutate(clinical_benefit = case_when(
-    ID %in% c("GEM21", "GEM22") ~ "low",
-    ID %in% c("GEM32", "GEM38") ~ "high",
-    TRUE ~ clinical_benefit  # mantener los demás sin cambios
-  ))
 
 
-# 1. BRAF_MEK - PFS ----
-curva_BRAF <- ggsurvplot(
-  survfit(Surv(TLP, !is.na(TLP)) ~ clinical_benefit,
-          data = db_final %>% 
-            filter(grupo == "BRAF_MEK") %>%
-            mutate(clinical_benefit = factor(clinical_benefit, levels = c("high", "low")))),
-  
-  palette = c("#7A3B9D", "#D1A5E5"),  # Lila oscuro y claro
-  conf.int = TRUE,
-  conf.int.alpha = 0.1,
-  risk.table = TRUE,
-  risk.table.y.text = FALSE,
-  
-  legend.title = "Firma",
-  legend.labs = c("Firma High", "Firma Low"),
-  title = "PFS según firma BRAF/MEKi",
-  xlab = "Meses",
-  ylab = "Probabilidad de no progresión",
-  risk.table.title = "Pacientes en riesgo",
-  tables.theme = theme_cleantable(),
-  pval = TRUE, # Mostrar log-rank
-  ggtheme = theme_minimal() +
-    theme(
-      plot.title = element_text(face = "bold", hjust = 0.5),
-      legend.position = "right")
-)
-
-# Guardar curva BRAF_MEK
-ggsave("PFS_BRAF_MEK.png", 
-       plot = print(curva_BRAF), 
-       width = 8, height = 7, dpi = 300)
-
-
-# 2. ITH - PFS ----
-curva_ITH <- ggsurvplot(
-  survfit(Surv(TLP, !is.na(TLP)) ~ clinical_benefit,
-          data = db_final %>% 
-            filter(grupo == "ITH") %>%
-            mutate(clinical_benefit = factor(clinical_benefit, levels = c("high", "low")))),
-  
-  palette = c("#114B9E", "#A4C7F2"),  # Azul oscuro y claro
-  conf.int = TRUE,
-  conf.int.alpha = 0.1,
-  risk.table = TRUE,
-  risk.table.y.text = FALSE,
-  
-  legend.title = "Firma",
-  legend.labs = c("Firma High", "Firma Low"),
-  title = "PFS según firma ITH",
-  xlab = "Meses",
-  ylab = "Probabilidad de no progresión",
-  risk.table.title = "Pacientes en riesgo",
-  tables.theme = theme_cleantable(),
-  pval = TRUE, # Mostrar log-rank
-  ggtheme = theme_minimal() +
-    theme(
-      plot.title = element_text(face = "bold", hjust = 0.5),
-      legend.position = "right")
-)
-
-# Guardar curva ITH
-ggsave("PFS_ITH.png", 
-       plot = print(curva_ITH), 
-       width = 8, height = 7, dpi = 300)
-
-
-
-
-# Combinar curva + tabla de riesgo (aunque sea solo una curva, debe ir en lista)
-combinado_BRAF <- arrange_ggsurvplots(list(curva_BRAF), print = FALSE)
-combinado_ITH  <- arrange_ggsurvplots(list(curva_ITH), print = FALSE)
-
-ggsave("PFS_BRAF_MEK_completo.png", 
-       plot = combinado_BRAF, 
-       width = 12, height = 6, dpi = 300)
-
-ggsave("PFS_ITH_completo.png", 
-       plot = combinado_ITH, 
-       width = 12, height = 6, dpi = 300)
-
-
-
-
-
-```
 
 
 
