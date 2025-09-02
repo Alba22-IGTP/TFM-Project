@@ -1,0 +1,32 @@
+proyecto;ID;BRAF_mut;NRAS_mut;CKIT_mut;grupo;TT_first_line;inicio_first_line;fin_first_line ;response_first_line;response_first_line_opt;PD_lt_3m;PD_lt_12m;clinical_benefit ;progresion_date;TT_second_line;inicio_second_line;fin_second_line ;response_second_line;exitus_or_last_control;estado_actual;estado_actual_binary;sexo;fecha_nacimiento;fecha_diagnostico;edad_diagnostico;tipo_tumor;LDH_basal;Breslow;Mitosis;Ulceracion;Clark
+github;sample 1;mut;WT;NV;BRAF_MEK;dabra_trame;10/12/2013;04/11/2014;RC;RC;NO;SI;high;10/12/2014;ipi;10/12/2014;18/03/2015;NR;18/03/2015;Exitus;Exitus;M;30/07/1981;24/11/2011;30;nodular;178;NV;NV;NV;NV
+github;sample 2;mut;WT;NV;BRAF_MEK;dabra_trame;02/05/2016;15/05/2017;RP;RP;NO;NO;high;12/06/2017;pembro;22/06/2017;08/08/2017;NR;28/08/2017;Exitus;Exitus;H;25/10/1991;04/11/2013;22;nodular;236;9,2;5;NV;IV
+github;sample 3;NV;NV;NV;BRAF_MEK;dabra_trame;13/05/2014;07/11/2017;RC;RC;NO;NO;high;15/12/2017;pembro;13/02/2018;13/02/2018;;05/03/2018;Exitus;Exitus;M;12/08/1950;15/11/2005;55;nodular;224;NV;NV;NV;NV
+github;sample 4;mut;NV;NV;ITH;nivo;05/02/2016;31/05/2016;RP;RP;SI;SI;low;31/05/2016;;;;;31/05/2016;Exitus;Exitus;H;26/01/1966;16/12/2015;49;;300;NV;NV;NV;NV
+github;sample 5;mut;WT;NV;BRAF_MEK;cobi_vemu;25/09/2017;19/12/2017;RP;RP;SI;SI;low;19/12/2017;;;;;15/01/2018;Exitus;Exitus;M;24/03/1949;08/03/2017;67;lentiginoso;1585;1,9;4;NO;IV
+github;sample 6;mut;NV;WT;BRAF_MEK;dabra_trame;06/08/2013;02/11/2015;RC;RC;NO;NO;high;29/11/2015;;;;;29/11/2015;Exitus;Exitus;M;02/11/1949;03/05/2012;62;nodular;251;7,2;6;NO;V
+github;sample 7;mut;WT;NV;ITH;pembro;12/01/2015;Ongoing;RC;RC;NO;NO;high;31/03/2020;;;;;31/03/2020;Vivo_sano;Vivo ;H;12/12/1968;20/11/2012;44;nodular;322;3;6;NO;IV
+github;sample 8;mut;NV;NV;ITH;pembro;05/03/2013;17/09/2013;RP;RP;NO;SI;low;24/09/2013;;;;;04/10/2013;Exitus;Exitus;H;07/09/1951;05/05/2011;59;superficial;294;1,6;5;NO;IV
+github;sample 9;mut;WT;NV;BRAF_MEK;dabra_trame;09/12/2014;Ongoing;RP;RP;NO;NO;high;12/03/2020;;;;;12/03/2020;Vivo_enfermo;Vivo ;H;17/12/1978;14/01/2014;35;nodular;148;60;30;NV;V
+github;sample 10;mut;WT;NV;BRAF_MEK;dabra_trame;28/04/2014;21/10/2014;RP;RP;NO;SI;low;13/11/2014;ipi;18/11/2014;11/12/2014;;16/01/2015;Exitus;Exitus;M;31/12/1972;15/01/2012;39;nodular;116;5;15;NO;IV
+github;sample 11;mut;WT;WT;BRAF_MEK;encora_bini;15/07/2015;10/01/2017;RP;RP;NO;NO;high;16/01/2017;pembro;26/01/2017;26/01/2017;;04/03/2017;Exitus;Exitus;H;01/10/1946;29/07/2014;67;nodular ;383;2,5;7;NO;IV
+github;sample 12;mut;NV;NV;ITH;pembro;24/09/2015;30/11/2015;PE;NR;NO;NO;low;17/11/2015;foternustina;21/12/2015;11/01/2016;;26/01/2016;Exitus;Exitus;H;09/01/1945;01/10/2014;69;nodular;248;NV;NV;NV;NV
+github;sample 13;mut;WT;WT;BRAF_MEK;dabra_trame;05/11/2015;05/01/2016;PE;NR;NO;NO;low;05/01/2016;VHIO;05/01/2016;30/01/2016;NR;30/01/2016;Exitus;Exitus;M;11/09/1978;23/07/2015;36;mucosas;773;8;78;SI;IV
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
