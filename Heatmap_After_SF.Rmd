@@ -35,7 +35,7 @@ if(!dir.exists(output_dir)) dir.create(output_dir)
 # Archivos de entrada necesarios
 # ===========================
 # 1. Matriz de expresión normalizada
-expr_file <- file.path(input_dir, "datos_corregidos_sizefactors.csv")
+expr_file <- file.path(input_dir, "final_normalized_matrix.csv")
 
 # 2. Base de datos clínica
 clinic_file <- file.path(input_dir, "clin_data.csv")
@@ -159,5 +159,6 @@ pca_plot <- ggplot(pca_data, aes(x=PC1, y=PC2, color=group)) +
 ggsave(file.path(output_dir, "PCA_plot.png"), pca_plot, width=10, height=8, dpi=300)
 
 ```
+
 
 
