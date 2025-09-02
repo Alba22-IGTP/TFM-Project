@@ -110,30 +110,22 @@ ggsave("Resultados/pca_top_genes.png", width=6, height=4)
 ```
 
 
-```{r correct}
-
-genes_interes <- c("CXCL8", "IHH", "WNT2", "BNIP3L", "MAPK10", "CXCL1", "WNT5B", "STC1", "STAT1", "IL1B",
-  "FAM124B", "VCAM1", "HLA-DQA2", "CD8B", "CCL4", "CD45RO", "FGF18", "ACVR1C", "CXCL10", 
-  "C1QB", "HMGB1", "PTGS2", "OAS2", "TMEM140", "MYCT1", "KRAS", "IRF9", "GPR160", "OAS3",
-  "TREM1", "ITGB2", "CD2", "PRKAA2", "PTGER4", "SLC11A1", "TRAF1", "FAS")
-
-```
-
-
 
 ```{r comp expr ITH}
-db_completa_log2 <- read_csv("C:/Users/adelapuente/Desktop/TFM/Nanostring/Datos finales/db_completa_log2.csv")
+```{r comp expr ITH}
+# --- Cargar datos Nanostring ---
+db_completa_log2 <- read_csv("Datos_finales/db_completa_log2.csv")
 db_completa_log2 <- as.data.frame(db_completa_log2)
 
 # Matriz expresión genes x muestras
 expression_matrix <- db_completa_log2 %>%
   dplyr::select(ID, starts_with("Endogenous_")) %>%
   column_to_rownames("ID") %>%
-  t() %>% 
+  t() %>%
   as.matrix()
 
 # Eliminar muestra GEM12 si existe
-if ("sample 12" %in% colnames(expression_matrix)) {
+if ("GEM12" %in% colnames(expression_matrix)) {
   expression_matrix <- expression_matrix[, !colnames(expression_matrix) %in% "GEM12"]
 }
 
@@ -147,6 +139,7 @@ metadata <- db_completa_log2 %>%
   ) %>%
   column_to_rownames("ID")
 
+# Crear variable respuesta combinada
 db_completa_log2 <- db_completa_log2 %>%
   mutate(
     respuesta = case_when(
@@ -159,127 +152,98 @@ db_completa_log2 <- db_completa_log2 %>%
 
 # Extraer nombres de gen del formato "Endogenous_SYMBOL_TRANSCRIPT"
 gene_symbols <- gsub("^Endogenous_([A-Z0-9]+)_.*", "\\1", rownames(expression_matrix))
-
-# Reemplazar rownames por los símbolos
 rownames(expression_matrix) <- gene_symbols
 
-
-# Genes presentes en cada base
+# Genes en común entre Nanostring y FPKM
 genes_fpkm <- unique(fpkm_pre_sel$Symbol)
 genes_expression <- rownames(expression_matrix)
-
-# Genes en común
 genes_comunes <- intersect(genes_fpkm, genes_expression)
 cat("Número de genes en común:", length(genes_comunes), "\n")
 
-
-library(dplyr)
-
-# Media expresión para PR
+# --- Medias de expresión ---
+# FPKM (PR y NR)
 fpkm_pr_mean <- fpkm_pre_sel %>%
   filter(Symbol %in% genes_comunes, response_opt == "PR") %>%
   group_by(Symbol) %>%
   summarise(mean_expr = mean(log2FPKM, na.rm = TRUE)) %>%
   column_to_rownames("Symbol")
 
-# Media expresión para NR
 fpkm_nr_mean <- fpkm_pre_sel %>%
   filter(Symbol %in% genes_comunes, response_opt == "NR") %>%
   group_by(Symbol) %>%
   summarise(mean_expr = mean(log2FPKM, na.rm = TRUE)) %>%
   column_to_rownames("Symbol")
 
+# ITH (high vs low)
+ith_high_samples <- db_completa_log2 %>% filter(respuesta == "ITH_high") %>% pull(ID)
+ith_low_samples  <- db_completa_log2 %>% filter(respuesta == "ITH_low") %>% pull(ID)
 
-# Muestras por grupo
-ith_high_samples <- db_completa_log2 %>%
-  filter(respuesta == "ITH_high") %>%
-  pull(ID)
-
-ith_low_samples <- db_completa_log2 %>%
-  filter(respuesta == "ITH_low") %>%
-  pull(ID)
-
-# Filtrar matriz para genes comunes
 expr_ith_high <- expression_matrix[genes_comunes, ith_high_samples, drop = FALSE]
 expr_ith_low  <- expression_matrix[genes_comunes, ith_low_samples, drop = FALSE]
 
-# Calcular medias por gen
 ith_high_mean <- rowMeans(expr_ith_high, na.rm = TRUE)
 ith_low_mean  <- rowMeans(expr_ith_low, na.rm = TRUE)
 
-
-# Orden común de genes
+# --- Correlaciones ---
 orden_genes <- intersect(rownames(fpkm_pr_mean), names(ith_high_mean))
-
-# Alinear vectores
 pr_vector   <- fpkm_pr_mean[orden_genes, , drop = TRUE]
 nr_vector   <- fpkm_nr_mean[orden_genes, , drop = TRUE]
 ithh_vector <- ith_high_mean[orden_genes]
 ithl_vector <- ith_low_mean[orden_genes]
 
-# Correlaciones Pearson
 cor_pr_ithh <- cor(pr_vector, ithh_vector, method = "spearman")
 cor_nr_ithl <- cor(nr_vector, ithl_vector, method = "spearman")
 
 cat("🔵 Correlación PR vs ITH_high:", round(cor_pr_ithh, 3), "\n")
 cat("🔴 Correlación NR vs ITH_low:", round(cor_nr_ithl, 3), "\n")
 
-
-
-# --- GRÁFICOS DE DISPERSIÓN ---
-# PR vs ITH_high
+# --- Gráficos ---
 library(ggrepel)
+genes_marcados <- c("CXCL10","KIT","CXCL9","CXCL1","BNIP3L","CCL14","CXCL2","WNT5B",
+                    "STAT1","WNT2","GBP4","SOX2","GBP1","SPRY4","IDO1","CCL4",
+                    "MAPK10","ANGPT1","HMGB1","CCL18","CCL20","OAS3","FAM124B",
+                    "IFITM1","FCN1","BID","CCNA1","VCAM1")
 
-genes_marcados <- c("CXCL10", "KIT", "CXCL9", "CXCL1", "BNIP3L", "CCL14", "CXCL2","WNT5B", "STAT1", "WNT2", "GBP4", "SOX2","GBP1","SPRY4", "IDO1", "CCL4","MAPK10", "ANGPT1", "HMGB1", "CCL18", "CCL20", "OAS3","FAM124B", "IFITM1",  "FCN1", "BID",  "CCNA1",  "VCAM1")
-
-# PR vs ITH_high con etiquetas
-df_pr_plot <- data.frame(
-  Gene = orden_genes,
-  FPKM_PR = pr_vector,
-  Expr_ITH_High = ithh_vector
-)
-
-df_pr_plot$highlight <- ifelse(df_pr_plot$Gene %in% genes_marcados, df_pr_plot$Gene, NA)
+# PR vs ITH_high
+df_pr_plot <- data.frame(Gene = orden_genes,
+                         FPKM_PR = pr_vector,
+                         Expr_ITH_High = ithh_vector) %>%
+  mutate(highlight = ifelse(Gene %in% genes_marcados, Gene, NA))
 
 plot_ITH_high <- ggplot(df_pr_plot, aes(x = FPKM_PR, y = Expr_ITH_High)) +
-  geom_point(color = "#3B4CC0", size = 2, alpha = 0.6, position = position_jitter(width = 0.2, height = 0.2)) +
+  geom_point(color = "#3B4CC0", size = 2, alpha = 0.6,
+             position = position_jitter(width = 0.2, height = 0.2)) +
   geom_smooth(method = "lm", se = TRUE, color = "black") +
   geom_text_repel(aes(label = highlight), na.rm = TRUE, size = 3, max.overlaps = 20) +
   labs(title = paste0("Correlación PR vs ITH_high (r = ", round(cor_pr_ithh, 2), ")"),
        x = "Expresión media log2FPKM (PR)",
-       y = "Expresión media log2 (ITH low)") +
+       y = "Expresión media log2 (ITH high)") +
   theme_minimal()
+ggsave("Resultados/PR_vs_ITH_high.png", plot = plot_ITH_high, width = 8, height = 6, dpi = 300)
 
-ggsave("PR_vs_ITH_high.png", plot = plot_ITH_high, width = 8, height = 6, dpi = 300)
-
-# NR vs ITH_low con etiquetas
-df_nr_plot <- data.frame(
-  Gene = orden_genes,
-  FPKM_NR = nr_vector,
-  Expr_ITH_Low = ithl_vector
-)
-
-df_nr_plot$highlight <- ifelse(df_nr_plot$Gene %in% genes_marcados, df_nr_plot$Gene, NA)
+# NR vs ITH_low
+df_nr_plot <- data.frame(Gene = orden_genes,
+                         FPKM_NR = nr_vector,
+                         Expr_ITH_Low = ithl_vector) %>%
+  mutate(highlight = ifelse(Gene %in% genes_marcados, Gene, NA))
 
 plot_ITH_low <- ggplot(df_nr_plot, aes(x = FPKM_NR, y = Expr_ITH_Low)) +
-  geom_point(color = "#A7C7E7", size = 2, alpha = 0.6, position = position_jitter(width = 0.2, height = 0.2)) +
+  geom_point(color = "#A7C7E7", size = 2, alpha = 0.6,
+             position = position_jitter(width = 0.2, height = 0.2)) +
   geom_smooth(method = "lm", se = TRUE, color = "black") +
   geom_text_repel(aes(label = highlight), na.rm = TRUE, size = 3, max.overlaps = 20) +
   labs(title = paste0("Correlación NR vs ITH_low (r = ", round(cor_nr_ithl, 2), ")"),
        x = "Expresión media log2FPKM (NR)",
        y = "Expresión media log2 (ITH low)") +
   theme_minimal()
-
-ggsave("NR_vs_ITH_low.png", plot = plot_ITH_low, width = 8, height = 6, dpi = 300)
-
+ggsave("Resultados/NR_vs_ITH_low.png", plot = plot_ITH_low, width = 8, height = 6, dpi = 300)
 
 ```
 
 
 
-```{r correlació BRAF_MEK}
-
-# --- Limpiar nombres de genes en RNA-seq (log2_fpkm_matrix) ---
+```{r comp expr BRAF_MEK}
+# --- Limpiar nombres de genes en RNA-seq ---
 gene_symbols_rnaseq <- gsub("_ENSG.*", "", rownames(log2_fpkm_matrix))
 rownames(log2_fpkm_matrix) <- gene_symbols_rnaseq
 
@@ -289,7 +253,7 @@ genes_rnaseq <- rownames(log2_fpkm_matrix)
 genes_comunes <- intersect(genes_nanostring, genes_rnaseq)
 cat("✅ Genes en común (sin filtrar):", length(genes_comunes), "\n")
 
-# --- Filtrar genes con expresión > 1 en al menos una muestra de ambos datasets ---
+# --- Filtrar genes con expresión > 0.5 en al menos una muestra de ambos datasets ---
 expr_rnaseq <- log2_fpkm_matrix[genes_comunes, ]
 expr_nano   <- expression_matrix[genes_comunes, ]
 
@@ -299,14 +263,14 @@ genes_filtrados <- genes_comunes[
 ]
 cat("🎯 Genes filtrados con expresión suficiente:", length(genes_filtrados), "\n")
 
-# --- RNA-seq: media por gen en LR y SR ---
+# --- RNA-seq: medias por grupo (LR y SR) ---
 lr_samples <- rownames(col_data)[col_data$response == "LR"]
 sr_samples <- rownames(col_data)[col_data$response == "SR"]
 
 lr_expr_mean <- rowMeans(log2_fpkm_matrix[genes_filtrados, lr_samples, drop = FALSE], na.rm = TRUE)
 sr_expr_mean <- rowMeans(log2_fpkm_matrix[genes_filtrados, sr_samples, drop = FALSE], na.rm = TRUE)
 
-# --- Nanostring: media por gen en BRAF_MEK_high y BRAF_MEK_low ---
+# --- Nanostring: medias por grupo (BRAF_MEK high y low) ---
 braf_high_samples <- db_completa_log2 %>%
   filter(respuesta == "BRAF_MEK_high") %>%
   pull(ID)
@@ -316,8 +280,10 @@ braf_low_samples <- db_completa_log2 %>%
   pull(ID)
 
 missing_samples <- setdiff(braf_high_samples, colnames(expression_matrix))
-cat("⚠️ Muestras de BRAF_MEK_high que NO están en la matriz de expresión:\n")
-print(missing_samples)
+if (length(missing_samples) > 0) {
+  cat("⚠️ Muestras de BRAF_MEK_high que NO están en la matriz de expresión:\n")
+  print(missing_samples)
+}
 
 braf_high_valid <- intersect(braf_high_samples, colnames(expression_matrix))
 braf_low_valid  <- intersect(braf_low_samples, colnames(expression_matrix))
@@ -340,54 +306,49 @@ cor_sr_braf_l <- cor(vec_sr, vec_braf_l, method = "spearman")
 cat("🔵 Correlación LR vs BRAF_MEK_high:", round(cor_lr_braf_h, 3), "\n")
 cat("🔴 Correlación SR vs BRAF_MEK_low:", round(cor_sr_braf_l, 3), "\n")
 
-# --- Gráficos de dispersión con jitter para evitar acumulación ---
+# --- Gráficos ---
 library(ggrepel)
+genes_marcados <- c("HLA-DQB1","COL11A1","APH1B","IL12RB2","HEY1",
+                    "IL6","IL18","GOT2","PARP12","SLC16A1","RIPK2")
 
-genes_marcados <- c("HLA-DQB1", "COL11A1", "APH1B", "IL12RB2", "HEY1", "IL6", "IL18", "GOT2", "PARP12", "SLC16A1", "RIPK2" ) 
 # LR vs BRAF_MEK_high
-df_lr_braf <- data.frame(
-  Gene = genes_orden,
-  RNAseq_LR = vec_lr,
-  Nano_BRAF_H = vec_braf_h
-)
+df_lr_braf <- data.frame(Gene = genes_orden,
+                         RNAseq_LR = vec_lr,
+                         Nano_BRAF_H = vec_braf_h) %>%
+  mutate(highlight = ifelse(Gene %in% genes_marcados, Gene, NA))
 
-df_lr_braf$highlight <- ifelse(df_lr_braf$Gene %in% genes_marcados, df_lr_braf$Gene, NA)
-
-plot_BRAF_high <-ggplot(df_lr_braf, aes(x = RNAseq_LR, y = Nano_BRAF_H)) +
-  geom_point(color = "#9370DB", size = 2, alpha = 0.6, position = position_jitter(width = 0.2, height = 0.2)) +
+plot_BRAF_high <- ggplot(df_lr_braf, aes(x = RNAseq_LR, y = Nano_BRAF_H)) +
+  geom_point(color = "#9370DB", size = 2, alpha = 0.6,
+             position = position_jitter(width = 0.2, height = 0.2)) +
   geom_smooth(method = "lm", se = TRUE, color = "black") +
   geom_text_repel(aes(label = highlight), na.rm = TRUE, size = 3, max.overlaps = 20) +
   labs(title = paste0("LR vs BRAF_MEK_high (r = ", round(cor_lr_braf_h, 2), ")"),
        x = "Expresión media log2FPKM (LR)",
-       y = "Expresión media log2 BRAF/MEKi high") +
+       y = "Expresión media log2 (BRAF/MEKi high)") +
   theme_minimal()
-
-ggsave("LR_vs_BRAF_high.png", plot = plot_BRAF_high, width = 8, height = 6, dpi = 300)
-
+ggsave("Resultados/LR_vs_BRAF_high.png", plot = plot_BRAF_high, width = 8, height = 6, dpi = 300)
 
 # SR vs BRAF_MEK_low
-df_sr_braf <- data.frame(
-  Gene = genes_orden,
-  RNAseq_SR = vec_sr,
-  Nano_BRAF_L = vec_braf_l
-)
-
-df_sr_braf$highlight <- ifelse(df_sr_braf$Gene %in% genes_marcados, df_sr_braf$Gene, NA)
+df_sr_braf <- data.frame(Gene = genes_orden,
+                         RNAseq_SR = vec_sr,
+                         Nano_BRAF_L = vec_braf_l) %>%
+  mutate(highlight = ifelse(Gene %in% genes_marcados, Gene, NA))
 
 plot_BRAF_low <- ggplot(df_sr_braf, aes(x = RNAseq_SR, y = Nano_BRAF_L)) +
-  geom_point(color = "#CE93D8", size = 2, alpha = 0.6, position = position_jitter(width = 0.2, height = 0.2)) +
+  geom_point(color = "#CE93D8", size = 2, alpha = 0.6,
+             position = position_jitter(width = 0.2, height = 0.2)) +
   geom_smooth(method = "lm", se = TRUE, color = "black") +
   geom_text_repel(aes(label = highlight), na.rm = TRUE, size = 3, max.overlaps = 20) +
   labs(title = paste0("SR vs BRAF_MEK_low (r = ", round(cor_sr_braf_l, 2), ")"),
-       x = "Expresión media log2FPKM (sR)",
-       y = "Expresión media log2 BRAF/MEKi low") +
+       x = "Expresión media log2FPKM (SR)",
+       y = "Expresión media log2 (BRAF/MEKi low)") +
   theme_minimal()
-
-ggsave("SR_vs_BRAF_low.png", plot = plot_BRAF_low, width = 8, height = 6, dpi = 300)
+ggsave("Resultados/SR_vs_BRAF_low.png", plot = plot_BRAF_low, width = 8, height = 6, dpi = 300)
 
 
 
 ```
+
 
 
 
