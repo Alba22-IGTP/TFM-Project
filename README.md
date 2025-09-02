@@ -9,5 +9,5 @@ En este proyecto de fin de Máster en Bioinformática se han seguido varios paso
 2. Representación de la expresión génica (mediante heatmap) de las muestras finales tras normalizar: Heatmap_After_SF.Rmd. Se incluye un ejemplo de datos clinicos en la carpeta de archivos: clin_data.csv.
 3. Datos clínicos de las muestras: Caracteristicas_clin.Rmd. Se necesitará el archivo db_completa_log2.csv generado en Heatmap_After_SF.Rmd.
 5. Análisis de exprsión diferencial: DE_Analysis_Limma.Rmd. Se necesitará el archivo db_completa_log2.csv generado en Heatmap_After_SF.Rmd.
-6. Validación externa con 2 bases de datos (1 por cada tratamiento) de RNASeq: Validación_BBDD.Rmd
+6. Validación externa con 2 bases de datos (1 por cada tratamiento) de RNASeq: Validación_BBDD.Rmd. Para este escript se necesitaran los archivos: GSE91061_BMS038109Sample.hg19KnownGene.fpkm.csv.gz, GSE196434_MR_GEO_rawdata.txt.gz y db_completa_log2.csv.
 7. Análisis no supervisado: ML.Rmd
