@@ -8,6 +8,7 @@ output: html_document
 
 **Preparamos datos**
 ```{r setup, include=FALSE}
+
 # Cargar las librerías necesarias
 library(tidyverse)
 library(limma)
@@ -17,15 +18,40 @@ library(org.Hs.eg.db)
 library(ggplot2)
 library(pheatmap)
 
-db_completa_log2 <- read_csv("C:/Users/adelapuente/Desktop/TFM/Nanostring/Datos finales/db_completa_log2.csv")
+# Instalar y cargar librería here si no la tienes
+if(!require(here)) install.packages("here")
+library(here)
 
+# Cargar el archivo CSV automáticamente desde la carpeta del proyecto
+db_completa_log2 <- read.csv(here("db_completa_log2.csv"))
 
-# 1. Convertir a data.frame estándar primero
-db_completa_log2 <- as.data.frame(db_completa_log2)
+# Comprobar que se cargó
+head(db_completa_log2)
 
-View(db_completa_log2)
+# Carpeta de salida
+output_dir <- "Resultados"
+if(!dir.exists(output_dir)) dir.create(output_dir)
 
-# 2. Extraer matriz de expresión
+# Ejemplo de guardar volcano plot
+save_volcano <- function(plot, filename, width = 6, height = 6) {
+  ggsave(
+    filename = file.path(output_dir, filename),
+    plot = plot,
+    device = "png",
+    width = width,
+    height = height,
+    dpi = 300,
+    units = "in"
+  )
+}
+
+# Guardar tabla de genes significativos
+write_csv(significant_genes, file.path(output_dir, "genes_significativos_nonresrict.csv"))
+
+```
+
+```{r Matriz para DE Analysis}
+# 1. Extraer matriz de expresión
 expression_matrix <- db_completa_log2 %>%
   # Seleccionar columnas manteniendo IDs
   dplyr::select(ID, starts_with("Endogenous_")) %>%
@@ -39,11 +65,8 @@ expression_matrix <- db_completa_log2 %>%
 print(dim(expression_matrix)) # [genes, muestras]
 print(expression_matrix[1:5, 1:5]) # Visualizar parte
 
-# Eliminar GEM12
-expression_matrix <- expression_matrix[, !colnames(expression_matrix) %in% "GEM12"]
 
-
-# 4. Preparar metadatos 
+# 2. Preparar metadatos 
 metadata <- db_completa_log2 %>%
   dplyr::select(ID, grupo, clinical_benefit, sexo, edad_diagnostico) %>%
   filter(ID %in% colnames(expression_matrix)) %>%
@@ -68,7 +91,6 @@ db_final <- cbind(metadata, expression_log_t)
 db_final <- db_final %>% 
   tibble::rownames_to_column(var = "ID")
 
-
 View(db_final)
 
 
@@ -91,116 +113,70 @@ dim(expression_matrix)
 library(tidyverse)
 library(limma)
 library(EnhancedVolcano)
+library(pheatmap)
+library(here)
+library(readr)
 
-db_completa_log2 <- as.data.frame(db_completa_log2)
-
-# Matriz expresión genes x muestras
-expression_matrix <- db_completa_log2 %>%
-  dplyr::select(ID, starts_with("Endogenous_")) %>%
-  column_to_rownames("ID") %>%
-  t() %>% 
-  as.matrix()
-
-# Eliminar muestra GEM12 si existe
-if ("GEM12" %in% colnames(expression_matrix)) {
-  expression_matrix <- expression_matrix[, !colnames(expression_matrix) %in% "GEM12"]
-}
-
-# Metadata muestras
-metadata <- db_completa_log2 %>%
-  dplyr::select(ID, grupo, clinical_benefit, sexo, edad_diagnostico) %>%
-  filter(ID %in% colnames(expression_matrix)) %>%
-  mutate(
-    grupo = factor(grupo, levels = c("BRAF_MEK", "ITH")),
-    clinical_benefit = factor(clinical_benefit, levels = c("low", "high"))
-  ) %>%
-  column_to_rownames("ID")
-
-# Ordenar metadata como columnas de matriz expresión
-metadata_ordered <- metadata[colnames(expression_matrix), , drop = FALSE]
-
-# --- Análisis global grupo ---
-design_grupo <- model.matrix(~ 0 + grupo, data = metadata_ordered)
+# --- Análisis global ---
+# --- Grupo ---
+design_grupo <- model.matrix(~0 + grupo, data = metadata_ordered)
 colnames(design_grupo) <- levels(metadata_ordered$grupo)
-
 contrast_grupo <- makeContrasts(BRAF_MEK_vs_ITH = BRAF_MEK - ITH, levels = design_grupo)
-
 fit_grupo <- lmFit(expression_matrix, design_grupo) %>%
   contrasts.fit(contrast_grupo) %>%
   eBayes()
 
-# --- Análisis global clinical_benefit ---
-design_benefit <- model.matrix(~ 0 + clinical_benefit, data = metadata_ordered)
+# --- Clinical benefit ---
+design_benefit <- model.matrix(~0 + clinical_benefit, data = metadata_ordered)
 colnames(design_benefit) <- levels(metadata_ordered$clinical_benefit)
-
 contrast_benefit <- makeContrasts(High_vs_Low = high - low, levels = design_benefit)
-
 fit_benefit <- lmFit(expression_matrix, design_benefit) %>%
   contrasts.fit(contrast_benefit) %>%
   eBayes()
 
-# --- Análisis por subgrupos ---
 
-# Función para análisis por grupo y beneficio
+# --- Análisis por subgrupos ---
 analyze_subgroup <- function(grupo_name, expression_matrix, metadata) {
   samples_sub <- metadata %>% filter(grupo == grupo_name)
-  expr_sub <- expression_matrix[, rownames(samples_sub), drop = FALSE]
-  
-  # Diseño para clinical_benefit (low, high)
-  design_sub <- model.matrix(~ clinical_benefit, data = samples_sub)
-  
-  fit_sub <- lmFit(expr_sub, design_sub) %>% eBayes()
-  return(fit_sub)
+  expr_sub <- expression_matrix[rownames(expression_matrix) %in% samples_sub$ID, , drop = FALSE]
+  design_sub <- model.matrix(~clinical_benefit, data = samples_sub)
+  lmFit(expr_sub, design_sub) %>% eBayes()
 }
 
 fit_braf <- analyze_subgroup("BRAF_MEK", expression_matrix, metadata_ordered)
-fit_ith <- analyze_subgroup("ITH", expression_matrix, metadata_ordered)
+fit_ith  <- analyze_subgroup("ITH", expression_matrix, metadata_ordered)
 
-# --- Comparación High benefit BRAF_MEK vs ITH ---
 
-high_samples <- metadata_ordered %>%
-  filter(clinical_benefit == "high", grupo %in% c("BRAF_MEK", "ITH"))
 
-expr_high <- expression_matrix[, rownames(high_samples), drop = FALSE]
-
-design_high <- model.matrix(~ 0 + grupo, data = high_samples)
+# --- Comparaciones high/low por grupo ---
+# High benefit BRAF_MEK vs ITH
+high_samples <- metadata_ordered %>% filter(clinical_benefit=="high", grupo %in% c("BRAF_MEK","ITH"))
+expr_high <- expression_matrix[rownames(expression_matrix) %in% high_samples$ID, , drop=FALSE]
+design_high <- model.matrix(~0 + grupo, data=high_samples)
 colnames(design_high) <- levels(high_samples$grupo)
+contrast_high <- makeContrasts(BRAF_MEK_vs_ITH_high = BRAF_MEK - ITH, levels=design_high)
+fit_high <- lmFit(expr_high, design_high) %>% contrasts.fit(contrast_high) %>% eBayes()
 
-contrast_high <- makeContrasts(BRAF_MEK_vs_ITH_high = BRAF_MEK - ITH, levels = design_high)
-
-fit_high <- lmFit(expr_high, design_high) %>%
-  contrasts.fit(contrast_high) %>%
-  eBayes()
-
-# --- Comparación Low benefit BRAF_MEK vs ITH ---
-
-low_samples <- metadata_ordered %>%
-  filter(clinical_benefit == "low", grupo %in% c("BRAF_MEK", "ITH"))
-
-expr_low <- expression_matrix[, rownames(low_samples), drop = FALSE]
-
-design_low <- model.matrix(~ 0 + grupo, data = low_samples)
+# Low benefit BRAF_MEK vs ITH
+low_samples <- metadata_ordered %>% filter(clinical_benefit=="low", grupo %in% c("BRAF_MEK","ITH"))
+expr_low <- expression_matrix[rownames(expression_matrix) %in% low_samples$ID, , drop=FALSE]
+design_low <- model.matrix(~0 + grupo, data=low_samples)
 colnames(design_low) <- levels(low_samples$grupo)
-
-contrast_low <- makeContrasts(BRAF_MEK_vs_ITH_low = BRAF_MEK - ITH, levels = design_low)
-
-fit_low <- lmFit(expr_low, design_low) %>%
-  contrasts.fit(contrast_low) %>%
-  eBayes()
+contrast_low <- makeContrasts(BRAF_MEK_vs_ITH_low = BRAF_MEK - ITH, levels=design_low)
+fit_low <- lmFit(expr_low, design_low) %>% contrasts.fit(contrast_low) %>% eBayes()
 
 
 # --- Función para extraer resultados ---
 extract_results <- function(fit, contrast_name) {
-  topTable(fit, number = Inf, adjust.method = "BH", sort.by = "none") %>%
-    as_tibble(rownames = "gene") %>%
+  topTable(fit, number=Inf, adjust.method="BH", sort.by="none") %>%
+    as_tibble(rownames="gene") %>%
     mutate(
       contrast = contrast_name,
-      significance = ifelse(P.Value < 0.05 & abs(logFC) > 1, "significant", "not significant"),
-      gene_clean = str_extract(gene, "(?<=Endogenous_).*(?=_NM)")
+      significance = ifelse(P.Value < 0.05 & abs(logFC) > 1, "significant","not significant"),
+      gene_clean = str_extract(gene,"(?<=Endogenous_).*")
     )
 }
 
-# Extraer y combinar resultados
 final_results <- bind_rows(
   extract_results(fit_grupo, "BRAF_MEK_vs_ITH"),
   extract_results(fit_benefit, "High_vs_Low_global"),
@@ -210,49 +186,22 @@ final_results <- bind_rows(
   extract_results(fit_low, "BRAF_MEK_Low_vs_ITH_Low")
 ) %>% arrange(P.Value)
 
-# Guardar resultados
-write_csv(final_results, "resultados_diferenciales_completos.csv")
+# Guardar CSV
+write_csv(final_results, here("Resultados", "resultados_diferenciales_completos.csv"))
 
-# --- Volcano plot ejemplo ---
-subset_results <- final_results %>% filter(contrast == "BRAF_MEK_High_vs_ITH_High")
-subset_results1 <- final_results %>% filter(contrast == "BRAF_MEK_High_vs_Low")
-subset_results2 <- final_results %>% filter(contrast == "ITH_High_vs_Low")
-subset_results3 <- final_results %>% filter(contrast == "BRAF_MEK_Low_vs_ITH_Low")
 
-library(EnhancedVolcano)
-library(ggplot2)
-
-# Function to save plots with consistent sizing
-save_volcano <- function(plot, filename, width = 6, height = 6) {
-  ggsave(
-    filename = filename,
-    plot = plot,
-    device = "png",  # or "pdf", "tiff", etc.
-    width = width,
-    height = height,
-    dpi = 300,
-    units = "in"
-  )
+# --- Volcano plot  ---
+save_volcano <- function(plot, filename) {
+  ggsave(here("Resultados", filename), plot=plot, device="png", width=6, height=6, dpi=300)
 }
 
-
-library(EnhancedVolcano)
-library(dplyr)
-
-# --- Función para generar volcano plot con resumen de genes ---
 plot_volcano_with_counts <- function(result_df, label_vector, contrast_name,
-                                     logfc_cutoff = 1, pval_cutoff = 0.05,
-                                     xlim_vals = c(-4, 4), ylim_vals = c(0, 4)) {
-  
-  # Contar genes up, down, total
-  genes_up <- result_df %>% filter(logFC >  logfc_cutoff, P.Value < pval_cutoff) %>% nrow()
-  genes_down <- result_df %>% filter(logFC < -logfc_cutoff, P.Value < pval_cutoff) %>% nrow()
-  genes_total <- result_df %>% filter(abs(logFC) > logfc_cutoff, P.Value < pval_cutoff) %>% nrow()
-  
-  # Título con resumen
-  title_text <- paste0(contrast_name, "\nUp: ", genes_up, " | Down: ", genes_down, " | Total: ", genes_total)
-  
-  # Volcano plot
+                                     logfc_cutoff=1, pval_cutoff=0.05,
+                                     xlim_vals=c(-4,4), ylim_vals=c(0,4)) {
+  genes_up <- result_df %>% filter(logFC>logfc_cutoff, P.Value<pval_cutoff) %>% nrow()
+  genes_down <- result_df %>% filter(logFC< -logfc_cutoff, P.Value<pval_cutoff) %>% nrow()
+  genes_total <- result_df %>% filter(abs(logFC)>logfc_cutoff, P.Value<pval_cutoff) %>% nrow()
+  title_text <- paste0(contrast_name, "\nUp:",genes_up," | Down:",genes_down," | Total:",genes_total)
   EnhancedVolcano(
     result_df,
     lab = label_vector,
@@ -262,30 +211,27 @@ plot_volcano_with_counts <- function(result_df, label_vector, contrast_name,
     FCcutoff = logfc_cutoff,
     title = title_text,
     subtitle = 'Differential Analysis',
-    legendLabels = c('No Sig.', 'Log2FC', 'P-Value', 'P & Log2FC'),
-    colAlpha = 0.7,
-    xlim = xlim_vals,
-    ylim = ylim_vals
+    legendLabels=c('No Sig','Log2FC','P-Value','P & Log2FC'),
+    colAlpha=0.7,
+    xlim=xlim_vals,
+    ylim=ylim_vals
   )
 }
 
-volcano1 <- plot_volcano_with_counts(subset_results, subset_results$gene_clean, "High BRAF/MEKi vs ITH")
-volcano2 <- plot_volcano_with_counts(subset_results1, subset_results1$gene_clean, "BRAF/MEKi high vs low")
-volcano3 <- plot_volcano_with_counts(subset_results2, subset_results2$gene_clean, "ITH high vs low")
-volcano4 <- plot_volcano_with_counts(subset_results3, subset_results3$gene_clean, "Low BRAF/MEKi vs ITH")
+# Seleccionar subconjuntos
+subsets <- list(
+  "BRAF_MEK_High_vs_ITH_High" = "High BRAF/MEKi vs ITH",
+  "BRAF_MEK_High_vs_Low" = "BRAF/MEKi High vs Low",
+  "ITH_High_vs_Low" = "ITH High vs Low",
+  "BRAF_MEK_Low_vs_ITH_Low" = "Low BRAF/MEKi vs ITH"
+)
 
-
-print(volcano1)
-print(volcano2)
-print(volcano3)
-print(volcano4)
-
-# Export all plots
-save_volcano(volcano1, "BRAF_MEK_vs_ITH_High1.png")
-save_volcano(volcano2, "BRAF_MEK_High_vs_Low1.png")
-save_volcano(volcano3, "ITH_High_vs_Low1.png")
-save_volcano(volcano4, "BRAF_MEK_vs_ITH_Low1.png")
-
+for(name in names(subsets)) {
+  df <- final_results %>% filter(contrast==name)
+  volcano <- plot_volcano_with_counts(df, df$gene_clean, subsets[[name]])
+  print(volcano)
+  save_volcano(volcano, paste0(name,".png"))
+}
 
 ```
 
@@ -293,11 +239,12 @@ save_volcano(volcano4, "BRAF_MEK_vs_ITH_Low1.png")
 
 **Tablas**
 ```{r Tablas}
+```{r Tablas, message=FALSE, warning=FALSE}
 library(dplyr)
 library(readr)
+library(here)
 
-library(dplyr)
-
+# Filtrar genes significativos según contraste y criterios
 significant_genes <- final_results %>%
   dplyr::filter(
     (contrast == "BRAF_MEK_High_vs_ITH_High" & P.Value < 0.05 & abs(logFC) > log2(0.5)) |
@@ -327,11 +274,11 @@ significant_genes <- final_results %>%
   ) %>%
   dplyr::select(Contrast, Gene, `Log2 Fold Change`, `P-value`, `Adjusted P-value`)
 
+# Mostrar tabla
 significant_genes
 
-
-# Exportar a CSV para abrir en Excel o similar
-write_csv(significant_genes, "genes_significativos_nonresrict.csv")
+# Exportar a CSV en la carpeta Resultados/ (ruta relativa)
+write_csv(significant_genes, here("Resultados", "genes_significativos_nonrestrict.csv"))
 
 
 ```
@@ -378,7 +325,7 @@ rownames(annotation_col) <- rownames(metadata_ordered)
 
 # --- Paso 3: Generar heatmap y guardar en PNG ---
 
-png("heatmap_BRAF_MEK_vs_ITH.png", width = 1000, height = 800)
+png("Resultados/heatmap_BRAF_MEK_vs_ITH.png", width = 1000, height = 800)
 pheatmap(expr_subset,
          annotation_col = annotation_col,
          scale = "row",
@@ -400,42 +347,30 @@ library(dplyr)
 library(ggplot2)
 library(ggrepel)
 
+expr_for_pca <- t(expr_subset)
 
-# 1. Transponer expresión para que las filas sean muestras y columnas genes
-expr_for_pca <- t(expr_subset)  # Ahora filas=muestras, columnas=genes
-
-# 2. Comprobar que muestras coinciden en expresión y metadatos
+# Comprobar coincidencia de muestras
 if(!all(rownames(expr_for_pca) %in% rownames(metadata))){
   stop("Hay muestras en la expresión que no están en el metadata")
 }
 
-# 3. Ordenar metadata para que coincida exactamente el orden de las muestras
 metadata_ordered <- metadata[rownames(expr_for_pca), ]
 
-# 4. Ejecutar PCA con centrado y escalado
 pca_res <- prcomp(expr_for_pca, center = TRUE, scale. = TRUE)
-
-# 5. Calcular % varianza explicada por PC1 y PC2
 var_explained <- pca_res$sdev^2 / sum(pca_res$sdev^2)
 pc1_var <- round(var_explained[1] * 100, 1)
 pc2_var <- round(var_explained[2] * 100, 1)
 
-# 6. Crear dataframe para plot con anotaciones
 pca_df <- data.frame(
   Sample = rownames(pca_res$x),
   PC1 = pca_res$x[,1],
   PC2 = pca_res$x[,2],
   Grupo = metadata_ordered$grupo,
-  Beneficio = metadata_ordered$clinical_benefit,
-  stringsAsFactors = FALSE
+  Beneficio = metadata_ordered$clinical_benefit
 )
 
+pca_df <- pca_df %>% mutate(Group = paste0(Grupo, "_", Beneficio))
 
-# Crear variable combinada Group
-pca_df <- pca_df %>%
-  mutate(Group = paste0(Grupo, "_", Beneficio))
-
-# Definir colores
 group_colors <- c(
   "BRAF_MEK_high" = "#9A32CD",
   "BRAF_MEK_low"  = "lavender",
@@ -443,153 +378,39 @@ group_colors <- c(
   "ITH_low"       = "lightblue"
 )
 
-# Graficar PCA
 p <- ggplot(pca_df, aes(x = PC1, y = PC2, color = Group)) +
-  geom_point( size = 3) +
+  geom_point(size = 3) +
   geom_text_repel(aes(label = Sample), size = 3, max.overlaps = 10) +
   scale_color_manual(values = group_colors) +
-  scale_shape_manual(values = c(high = 16, low = 17)) +
   labs(
-    title = "PCA Genes Interés",
+    title = "PCA Genes de Interés",
     x = paste0("PC1 (", pc1_var, "% varianza)"),
     y = paste0("PC2 (", pc2_var, "% varianza)"),
-    color = "Grupo",
-    shape = "Beneficio clínico"
+    color = "Grupo"
   ) +
   theme_minimal(base_size = 14) +
-  theme(
-    legend.position = "right",
-    plot.title = element_text(hjust = 0.5)
-  )
+  theme(legend.position = "right",
+        plot.title = element_text(hjust = 0.5))
 
-print(p)
+ggsave("Resultados/PCA_Genes_Interés.png", plot = p, width = 8, height = 6, dpi = 300)
 
-ggsave("PCA_Genes_Interés.png", plot = p, width = 8, height = 6, dpi = 300)
-
-
-
-
-
-
-# --- PC LOADINGS PLOT ---
-loadings <- pca_res$rotation[,1:2] %>% 
-  as.data.frame() %>%
-  tibble::rownames_to_column("Gene") %>%
-  mutate(Gene = gsub(".*_", "", Gene)) # Extract gene names
-
-loadings_plot <- ggplot(loadings, aes(x = PC1, y = PC2)) +
-  geom_segment(
-    aes(x = 0, y = 0, xend = PC1, yend = PC2),
-    arrow = arrow(length = unit(0.2, "cm")),
-    color = "darkred"
-  ) +
-  geom_text_repel(
-    aes(label = Gene),
-    size = 3,
-    max.overlaps = 15
-  ) +
-  labs(
-    title = "Contribución de Genes a los PCs",
-    x = paste0("Loadings PC1 (", pc1_var, "% var)"),
-    y = paste0("Loadings PC2 (", pc2_var, "% var)")
-  ) +
-  theme_minimal()
-
-ggsave("PCA_loadings_plot.png", loadings_plot, width = 7, height = 6, dpi = 300)
-
-# Display plots
-
-print(loadings_plot)
-
-
-library(ggplot2)
-
-# Calculate variance explained
-# Calculate variance explained
-var_explained <- pca_res$sdev^2 / sum(pca_res$sdev^2)
-cum_var_explained <- cumsum(var_explained)
-
-# Create dataframe for plotting (FIXED SYNTAX)
-var_df <- data.frame(
-  PC = factor(1:length(var_explained)),  # Closing parenthesis was missing
-  Variance = var_explained,
-  Cumulative = cum_var_explained
+write.csv(
+  significant_genes %>% filter(Contrast == "BRAF/MEK High vs ITH High"),
+  "Resultados/tabla_genes_significativos_BRAF_MEK_vs_ITH.csv",
+  row.names = FALSE
 )
 
-# Scree plot (individual variances)
-library(ggplot2)
-
-# Using the corrected var_df
-scree_plot <- ggplot(var_df, aes(x = PC, y = Variance)) +
-  geom_col(fill = "steelblue", alpha = 0.8) +
-  geom_text(aes(label = scales::percent(Variance, accuracy = 0.1)), vjust = -0.5) +
-  labs(
-    title = "Variance Explained by Principal Components",
-    x = "Principal Component",
-    y = "Proportion of Variance"
-  ) +
-  scale_y_continuous(labels = scales::percent_format()) +
-  theme_minimal()
-
-print(scree_plot)
-
-
-# Cumulative variance plot
-cumulative_plot <- ggplot(var_df, aes(x = PC, y = Cumulative, fill = Cumulative)) +
-  geom_col(alpha = 0.8, width = 0.7) +
-  geom_text(
-    aes(label = paste0(round(Cumulative*100, 1), "%")),
-    vjust = -0.5, 
-    size = 4,
-    fontface = "bold",
-    color = "black"
-  ) +
-  scale_fill_gradientn(
-    colors = c("#00CED1", "#9A32CD"),  # Blue -> Lila -> Pink
-    limits = c(0, 1),
-    labels = scales::percent_format(),
-    name = "Varianza Acumulada"
-  ) +
-  labs(
-    title = "Varianza Acumulada Explicada",
-    subtitle = "Por Componentes Principales (PCs)",
-    x = "Número de Componente Principal (PC)",
-    y = "Varianza Acumulada",
-    caption = "El color refleja la contribución acumulativa"
-  ) +
-  scale_y_continuous(
-    labels = scales::percent_format(),
-    limits = c(0, 1.05),  # Extra space for labels
-    breaks = seq(0, 1, by = 0.2)
-  ) +
-  theme_minimal(base_size = 14) +
-  theme(
-    plot.title = element_text(hjust = 0.5, face = "bold", size = 16),
-    plot.subtitle = element_text(hjust = 0.5, size = 12),
-    legend.position = "right",
-    legend.key.height = unit(1.5, "cm"),
-    panel.grid.major.x = element_blank(),
-    axis.text.x = element_text(angle = 45, hjust = 1)
-  )
-
-
-# Save plots
-ggsave("scree_plot.png", scree_plot, width = 8, height = 5, dpi = 300)
-ggsave("cumulative_variance_plot.png", cumulative_plot, width = 10, height = 6, dpi = 300)
-
-# Display
-print(scree_plot)
-print(cumulative_plot)
 ```
-
 
 
 ```{r efectos sexo y edad}
 library(dplyr)
 library(ggplot2)
 library(limma)
+library(DT)
+library(stringr)
 
-# Genes significativos (de tus análisis previos)
+# --- Filtrar genes significativos según contrastes previos ---
 sig_genes <- final_results %>%
   filter(
     (contrast == "BRAF_MEK_High_vs_ITH_High" & P.Value < 0.05 & abs(logFC) > log2(1.5)) |
@@ -599,80 +420,36 @@ sig_genes <- final_results %>%
   pull(gene) %>%
   unique()
 
-# Matriz de expresión filtrada
+# --- Matriz de expresión filtrada ---
 expr_sig <- expression_matrix[rownames(expression_matrix) %in% sig_genes, ]
 
-
-# Modelo lineal (ya lo tienes)
+# --- Modelo lineal: efectos de sexo y edad ---
 design <- model.matrix(~ sexo + edad_diagnostico, data = metadata_ordered)
 fit <- lmFit(expr_sig, design) %>% eBayes()
 
-# Resultados para SEXO (H vs M)
-results_sexo <- topTable(fit, coef = "sexoM", number = Inf) %>%  # ¡Usar "sexoM"!
+# --- Resultados SEXO ---
+results_sexo <- topTable(fit, coef = "sexoM", number = Inf) %>%
   as_tibble(rownames = "gene") %>%
   mutate(
     gene_clean = str_extract(gene, "(?<=Endogenous_).*(?=_NM)"),
     Direction = ifelse(logFC > 0, "Mayor en Mujeres (M)", "Mayor en Hombres (H)")
   )
 
-# Resultados para EDAD
+# --- Resultados EDAD ---
 results_edad <- topTable(fit, coef = "edad_diagnostico", number = Inf) %>%
   as_tibble(rownames = "gene") %>%
   mutate(gene_clean = str_extract(gene, "(?<=Endogenous_).*(?=_NM)"))
 
-
-
-# Genes significativamente asociados (p < 0.05)
+# --- Genes significativos p<0.05 ---
 genes_sexo_sig <- results_sexo %>% filter(P.Value < 0.05) %>% pull(gene_clean)
 genes_edad_sig <- results_edad %>% filter(P.Value < 0.05) %>% pull(gene_clean)
 
-
-library(DT)  # Para tablas interactivas
-
+# --- Tablas interactivas TOP 10 ---
 results_sexo %>%
   arrange(P.Value) %>%
   head(10) %>%
   datatable(options = list(pageLength = 5), rownames = FALSE) %>%
   formatSignif(columns = c("logFC", "P.Value", "adj.P.Val"), digits = 3)
-
-
-library(ggplot2)
-
-if (nrow(results_sexo) > 0) {
-  top_gene <- results_sexo$gene[1]
-  gene_name <- results_sexo$gene_clean[1]
-  
-  df_plot <- data.frame(
-    Expression = expr_sig[top_gene, ],
-    Sex = metadata_ordered$sexo,
-    Grupo = metadata_ordered$grupo
-  )
-  
-  ggplot(df_plot, aes(x = Sex, y = Expression, fill = Sex)) +
-    geom_boxplot() +
-    geom_jitter(width = 0.1, aes(color = Grupo), size = 3) +
-    scale_fill_manual(values = c("H" = "#4E79A7", "M" = "#F28E2B")) +
-    labs(
-      title = paste("Expresión de", gene_name, "por sexo"),
-      subtitle = paste("P-value =", signif(results_sexo$P.Value[1], 3)),
-      y = "log2(Expresión)"
-    ) +
-    theme_minimal()
-}
-
-plot_sexo <- ggplot(results_sexo, aes(x = P.Value)) +
-  geom_histogram(bins = 30, fill = "palevioletred", color = "white") +
-  geom_vline(xintercept = 0.05, linetype = "dashed", color = "red") +
-  labs(
-    title = "Distribución de p-valores para el efecto de sexo",
-    subtitle = "Sin enriquecimiento cerca de 0 (no hay efectos significativos)",
-    x = "p-valor", 
-    y = "Número de genes"
-  ) +
-  theme_minimal()
-
-
-library(DT)  # Para tablas interactivas
 
 results_edad %>%
   arrange(P.Value) %>%
@@ -680,12 +457,52 @@ results_edad %>%
   datatable(options = list(pageLength = 5), rownames = FALSE) %>%
   formatSignif(columns = c("logFC", "P.Value", "adj.P.Val"), digits = 3)
 
+# --- Histograma p-valores SEXO ---
+plot_sexo <- ggplot(results_sexo, aes(x = P.Value)) +
+  geom_histogram(bins = 30, fill = "palevioletred", color = "white") +
+  geom_vline(xintercept = 0.05, linetype = "dashed", color = "red") +
+  labs(
+    title = "Distribución de p-valores para efecto de sexo",
+    x = "p-valor", y = "Número de genes"
+  ) +
+  theme_minimal()
 
-if (nrow(results_edad) > 0) {
-  # Seleccionar el gen más significativo
+# --- Histograma p-valores EDAD ---
+plot_edad <- ggplot(results_edad, aes(x = P.Value)) +
+  geom_histogram(bins = 30, fill = "slateblue2", color = "white") +
+  geom_vline(xintercept = 0.05, linetype = "dashed", color = "red") +
+  labs(
+    title = "Distribución de p-valores para efecto de edad",
+    x = "p-valor", y = "Número de genes"
+  ) +
+  theme_minimal()
+
+# --- Guardar histogramas en carpeta Resultados ---
+ggsave("Resultados/histograma_pvalores_sexo.png", plot_sexo, width = 7, height = 5, dpi = 300)
+ggsave("Resultados/histograma_pvalores_edad.png", plot_edad, width = 7, height = 5, dpi = 300)
+
+# --- Boxplot para el gen más significativo por sexo ---
+if(nrow(results_sexo) > 0) {
+  top_gene <- results_sexo$gene[1]
+  gene_name <- results_sexo$gene_clean[1]
+  df_plot <- data.frame(
+    Expression = expr_sig[top_gene, ],
+    Sex = metadata_ordered$sexo,
+    Grupo = metadata_ordered$grupo
+  )
+  ggplot(df_plot, aes(x = Sex, y = Expression, fill = Sex)) +
+    geom_boxplot() +
+    geom_jitter(width = 0.1, aes(color = Grupo), size = 3) +
+    scale_fill_manual(values = c("H" = "#4E79A7", "M" = "#F28E2B")) +
+    labs(title = paste("Expresión de", gene_name, "por sexo"),
+         y = "log2(Expresión)") +
+    theme_minimal()
+}
+
+# --- Scatter y boxplot para edad ---
+if(nrow(results_edad) > 0) {
   top_gene_edad <- results_edad$gene[1]
   gene_name_edad <- results_edad$gene_clean[1]
-  
   df_edad <- data.frame(
     Expression = expr_sig[top_gene_edad, ],
     Edad = metadata_ordered$edad_diagnostico,
@@ -693,521 +510,45 @@ if (nrow(results_edad) > 0) {
     Grupo = metadata_ordered$grupo
   )
   
+  # Scatter con regresión por grupo
   ggplot(df_edad, aes(x = Edad, y = Expression, color = Grupo, shape = Sexo)) +
     geom_point(size = 3) +
-    geom_smooth(method = "lm", se = FALSE, aes(group = Grupo)) +  # Línea de regresión por grupo
+    geom_smooth(method = "lm", se = FALSE, aes(group = Grupo)) +
     scale_color_manual(values = c("BRAF_MEK" = "#E41A1C", "ITH" = "#377EB8")) +
-    scale_shape_manual(values = c("H" = 16, "M" = 17)) +  # Formas para H/M
-    labs(
-      title = paste("Expresión de", gene_name_edad, "vs edad"),
-      subtitle = paste("P-value =", signif(results_edad$P.Value[1], 3)),
-      x = "Edad al diagnóstico (años)",
-      y = "log2(Expresión)",
-      caption = "Líneas: Tendencia por grupo (BRAF/MEK vs ITH)"
-    ) +
-    theme_minimal() +
-    theme(legend.position = "top")
-}
-
-if (nrow(results_edad) > 0) {
-  # Crear grupos de edad (ej: percentil 50%)
+    scale_shape_manual(values = c("H" = 16, "M" = 17)) +
+    labs(title = paste("Expresión de", gene_name_edad, "vs edad"),
+         x = "Edad al diagnóstico (años)", y = "log2(Expresión)") +
+    theme_minimal()
+  
+  # Boxplot por grupo de edad (mediana)
   df_edad_groups <- df_edad %>% 
-    mutate(
-      Grupo_Edad = ifelse(Edad > median(Edad), "Mayores", "Jóvenes"),
-      Grupo_Edad = factor(Grupo_Edad, levels = c("Jóvenes", "Mayores"))
-    )
+    mutate(Grupo_Edad = ifelse(Edad > median(Edad), "Mayores", "Jóvenes"),
+           Grupo_Edad = factor(Grupo_Edad, levels = c("Jóvenes", "Mayores")))
   
   ggplot(df_edad_groups, aes(x = Grupo_Edad, y = Expression, fill = Grupo_Edad)) +
     geom_boxplot(alpha = 0.7) +
     geom_jitter(aes(color = Grupo), width = 0.1, size = 2.5) +
     scale_fill_manual(values = c("Jóvenes" = "#FFD700", "Mayores" = "#CD7F32")) +
     scale_color_manual(values = c("BRAF_MEK" = "#E41A1C", "ITH" = "#377EB8")) +
-    labs(
-      title = paste("Expresión de", gene_name_edad, "por grupo de edad"),
-      subtitle = paste("Mediana de edad =", median(df_edad$Edad), "años"),
-      x = "",
-      y = "log2(Expresión)"
-    ) +
-    theme_minimal() +
-    theme(legend.position = "right")
-}
-
-
-plot_edad <- ggplot(results_edad, aes(x = P.Value)) +
-  geom_histogram(bins = 30, fill = "slateblue2", color = "white") +
-  geom_vline(xintercept = 0.05, linetype = "dashed", color = "red") +
-  labs(
-    title = "Distribución de p-valores para el efecto edad",
-    subtitle = "Sin enriquecimiento cerca de 0 (no hay efectos significativos)",
-    x = "p-valor", 
-    y = "Número de genes"
-  ) +
-  theme_minimal()
-
-ggsave("histograma_pvalores_sexo.png", plot_sexo, width = 7, height = 5, dpi = 300)
-ggsave("histograma_pvalores_edad.png", plot_edad, width = 7, height = 5, dpi = 300)
-
-#genes_seleccionados <- c("WNT2", "STAT1", "WNT5B", "CXCL10", "MAPK10", "CXCL1", "FAM124B", "BNIP3L", "OAS3", "HMGB1", "VCAM1", "CCL4")
-```
-
-
-```{r final heatmap}
-# Cargar librerías necesarias
-
-
-library(dplyr)
-library(tibble)
-library(pheatmap)
-library(RColorBrewer)
-
-
-# Aseguramos que db_completa_log2 sea tibble para usar dplyr sin problemas
-
-db_completa_log2 <- as_tibble(db_completa_log2)
-
-# --- Genes seleccionados ---
-genes_seleccionados <- c("CXCL10", "KIT", "CXCL9", "CXCL1", "BNIP3L", "CCL14", "CXCL2","WNT5B", "STAT1", "WNT2", "GBP4", "SOX2","GBP1","SPRY4", "IDO1", "CCL4","MAPK10", "ANGPT1", "HMGB1", "CCL18", "CCL20", "OAS3","FAM124B", "IFITM1",  "FCN1", "BID",  "CCNA1",  "VCAM1")
-#genes_seleccionados <- c("HLA-DQB1", "COL11A1", "APH1B", "IL12RB2", "HEY1", "IL6", "IL18", "GOT2", "PARP12", "SLC16A1", "RIPK2")
-
-# --- Colores para anotaciones ---
-ann_colors <- list(
-  Group = c(
-    "BRAF_MEK_high" = "#9370DB", 
-    "BRAF_MEK_low"  = "lavender",
-    "ITH_high"      = "steelblue4", 
-    "ITH_low"       = "lightblue"
-  )
-)
-
-# --- Función para acortar nombres de genes ---
-acortar_genes <- function(nombres_largos) {
-  sub("Endogenous_(.*?)_NM.*", "\\1", nombres_largos)
-}
-
-acortados <- acortar_genes(rownames(expression_matrix))
-head(acortados)
-
-# --- Función para escalar y filtrar matriz ---
-escalar_y_filtrar <- function(matriz) {
-  matriz <- matriz[, apply(matriz, 2, var, na.rm = TRUE) > 0, drop = FALSE]
-  matriz_escalada <- t(scale(t(matriz)))
-  matriz_escalada[is.na(matriz_escalada)] <- 0
-  matriz_escalada
-}
-
-# --- Función para crear el dataframe de anotaciones ---
-crear_annotation_df <- function(muestras) {
-  df <- db_completa_log2 %>%
-    filter(ID %in% muestras) %>%
-    distinct(ID, .keep_all = TRUE) %>%
-    mutate(Group = paste(grupo, clinical_benefit, sep = "_"))
-  
-  df2 <- df[, c("ID", "Group"), drop = FALSE]
-  tibble::column_to_rownames(df2, "ID")
-}
-
-# --- Preparar matriz de expresión (traspuesta para que filas sean muestras) ---
-expr_matrix_filtered <- t(expression_matrix)  # Asegúrate que expression_matrix está correctamente definida
-
-db_completa_log2 <- db_completa_log2 %>%
-  filter(ID %in% rownames(expr_matrix_filtered))
-
-# Crear patrón para filtrar columnas con genes seleccionados
-genes_pattern <- paste0("(^|_)(", paste(genes_seleccionados, collapse = "|"), ")($|_)")
-# Extraer nombres de genes reales
-nombres_columnas <- colnames(expr_matrix_filtered)
-genes_en_col <- sub("Endogenous_(.*?)_NM.*", "\\1", nombres_columnas)
-
-# Ver si alguno coincide con genes_seleccionados
-cols_filtradas <- nombres_columnas[genes_en_col %in% genes_seleccionados]
-
-cat("Genes seleccionados encontrados en matriz:\n")
-print(cols_filtradas)
-
-cat("Columnas filtradas:\n")
-print(cols_filtradas)
-
-
-# Añadir columna combinada grupo + beneficio clínico para anotaciones
-db_completa_log2 <- db_completa_log2 %>%
-  mutate(grupo_cb = paste(grupo, clinical_benefit, sep = "_"))
-
-crear_y_guardar_heatmap <- function(muestras, titulo, cutree_rows = 2, cutree_cols = 2, carpeta_salida = "heatmaps") {
-  # Ensure graphics device is closed
-  if (dev.cur() > 1) dev.off()
-  
-  cat("=== Creando heatmap:", titulo, "===\n")
-  
-  # Check if samples exist
-  if (length(muestras) == 0) {
-    warning("No samples provided for heatmap")
-    return(NULL)
-  }
-  
-  # Subset matrix
-  matriz_sub <- expr_matrix_filtered[muestras, cols_filtradas, drop = FALSE]
-  
-  if (nrow(matriz_sub) == 0 || ncol(matriz_sub) == 0) {
-    warning("Empty matrix after subsetting")
-    return(NULL)
-  }
-  
-  # Shorten gene names
-  colnames(matriz_sub) <- acortar_genes(colnames(matriz_sub))
-  
-  # Transpose and scale
-  matriz_transpuesta <- t(matriz_sub)
-  matriz_escalada <- escalar_y_filtrar(matriz_transpuesta)
-  
-  # Create output directory
-  if (!dir.exists(carpeta_salida)) {
-    dir.create(carpeta_salida, recursive = TRUE)
-  }
-  
-  # Create filename (remove special characters)
-  nombre_archivo <- paste0(gsub("[^[:alnum:]_]", "", titulo), ".png")
-  ruta <- file.path(carpeta_salida, nombre_archivo)
-  
-  # Create heatmap
-  tryCatch({
-    png(ruta, width = 1200, height = 1000, res = 150)
-    
-    print(pheatmap(
-      matriz_escalada,
-      annotation_col = crear_annotation_df(colnames(matriz_escalada)),
-      annotation_colors = ann_colors,
-      clustering_method = "ward.D2",
-      cutree_rows = cutree_rows,
-      cutree_cols = cutree_cols,
-      main = titulo,
-      color = colorRampPalette(rev(brewer.pal(9, "RdBu")))(100),
-      breaks = seq(-2, 2, length.out = 101)
-    ))
-    
-    dev.off()
-    cat("Heatmap saved successfully to:", ruta, "\n")
-  }, error = function(e) {
-    dev.off()
-    warning("Error creating heatmap: ", e$message)
-    file.remove(ruta) # Remove empty file if created
-  })
-}
-
-# --- 1. Heatmap con todas las muestras ---
-crear_y_guardar_heatmap(
-  muestras = rownames(expr_matrix_filtered),
-  titulo   = "Heatmap_global_genes_seleccionados"
-)
-
-# --- 2. Heatmap con muestras ITH_high y BRAF_MEK_high ---
-muestras_ith_braf_high <- db_completa_log2 %>%
-  filter((grupo == "ITH" & clinical_benefit == "high") |
-         (grupo == "BRAF_MEK" & clinical_benefit == "high")) %>%
-  pull(ID)
-
-crear_y_guardar_heatmap(
-  muestras = muestras_ith_braf_high,
-  titulo = "Heatmap_ITH_high_vs_BRAF_MEK_high"
-)
-
-# --- 3. Heatmap con muestras ITH_high y ITH_low ---
-muestras_ith_high_low <- db_completa_log2 %>%
-  filter(grupo == "ITH" & clinical_benefit %in% c("high", "low")) %>%
-  pull(ID)
-
-crear_y_guardar_heatmap(
-  muestras = muestras_ith_high_low,
-  titulo = "Heatmap_ITH_high_vs_ITH_low"
-)
-
-# --- 4. Heatmap con muestras BRAF_MEK_high y BRAF_MEK_low ---
-muestras_braf_high_low <- db_completa_log2 %>%
-  filter(grupo == "BRAF_MEK" & clinical_benefit %in% c("high", "low")) %>%
-  pull(ID)
-
-crear_y_guardar_heatmap(
-  muestras = muestras_braf_high_low,
-  titulo = "Heatmap_BRAF_MEK_high_vs_BRAF_MEK_low"
-)
-
-# --- 5. Heatmap con muestras ITH_low y BRAF_MEK_low ---
-muestras_low_braf_ith <- db_completa_log2 %>%
-  filter((grupo == "ITH" & clinical_benefit == "low") |
-         (grupo == "BRAF_MEK" & clinical_benefit == "low")) %>%
-  pull(ID)
-
-crear_y_guardar_heatmap(
-  muestras = muestras_braf_high_low,
-  titulo = "Heatmap_BRAF_MEK_low_vs_ITH_low"
-)
-
-
-crear_y_guardar_heatmap <- function(muestras, titulo) {
-  cat("Función llamada con", length(muestras), "muestras\n")
-  print(head(muestras))
-}
-
-
-
-```
-
-
-```{r PCA FINAL}
-library(Rtsne)
-library(ggplot2)
-install.packages("ggrepel")  # si no lo tienes instalado
-library(ggrepel)
-
-
-# Muestras para cada comparación:
-muestras_global <- rownames(expr_matrix_filtered)
-
-# Extraer solo el nombre del gen de las columnas (segundo elemento tras separar por "_")
-genes_en_matriz <- sapply(strsplit(colnames(expr_matrix_filtered), "_"), function(x) x[2])
-
-# Filtrar columnas que coinciden con los genes seleccionados
-cols_filtradas <- colnames(expr_matrix_filtered)[genes_en_matriz %in% genes_seleccionados]
-
-# Confirmar qué genes se han encontrado y cuántas columnas hay
-cat("Genes encontrados en matriz:\n")
-print(unique(genes_en_matriz[genes_en_matriz %in% genes_seleccionados]))
-cat("Número de columnas filtradas:", length(cols_filtradas), "\n")
-
-
-muestras_ith_braf_high <- db_completa_log2 %>%
-  filter((grupo == "ITH" & clinical_benefit == "high") | (grupo == "BRAF_MEK" & clinical_benefit == "high")) %>%
-  pull(ID)
-
-muestras_ith_high_low <- db_completa_log2 %>%
-  filter(grupo == "ITH") %>%
-  pull(ID)
-
-muestras_braf_high_low <- db_completa_log2 %>%
-  filter(grupo == "BRAF_MEK") %>%
-  pull(ID)
-
-
-# Tus colores definidos
-ann_colors <- list(
-  Group = c(
-    "BRAF_MEK_high" = "#9370DB", 
-    "BRAF_MEK_low"  = "lavender",
-    "ITH_high"      = "steelblue4", 
-    "ITH_low"       = "lightblue"
-  )
-)
-
-db_completa_log2$grupo_cb <- paste0(db_completa_log2$grupo, "_", db_completa_log2$clinical_benefit)
-
-analizar_cluster <- function(muestras, titulo, expr_mat, genes_sel, anotaciones) {
-  
-  # Extraer nombre intermedio de los genes en la matriz
-  genes_en_matriz <- sapply(strsplit(colnames(expr_mat), "_"), function(x) x[2])
-  
-  # Filtrar columnas que coincidan con genes_sel
-  cols_filtradas <- colnames(expr_mat)[genes_en_matriz %in% genes_sel]
-  
-  # Filtrar muestras existentes
-  muestras_val <- intersect(muestras, rownames(expr_mat))
-  
-  cat("Number of samples after filtering:", length(muestras_val), "\n")  # Debug
-  
-  # Subconjunto
-  mat_sub <- expr_mat[muestras_val, cols_filtradas, drop = FALSE]
-  
-  if (ncol(mat_sub) == 0) {
-    stop("No hay columnas/gens seleccionados después del filtrado. Revisa nombres.")
-  }
-  if (nrow(mat_sub) == 0) {
-    stop("No hay muestras seleccionadas después del filtrado. Revisa muestras.")
-  }
-  
-  mat_scaled <- scale(mat_sub)
-  
-  # Check for NA/NaN/Infinite values (common issue in t-SNE)
-  if (any(!is.finite(mat_scaled))) {
-    stop("Matrix contains NA/NaN/Inf values after scaling.")
-  }
-  
-  # PCA (unchanged)
-  pca_res <- prcomp(mat_scaled, center = TRUE, scale. = TRUE)
-  var_exp <- pca_res$sdev^2 / sum(pca_res$sdev^2)
-  pc1_var <- round(var_exp[1] * 100, 1)
-  pc2_var <- round(var_exp[2] * 100, 1)
-  
-  pca_df <- data.frame(
-    Sample = rownames(pca_res$x),
-    PC1 = pca_res$x[,1],
-    PC2 = pca_res$x[,2]
-  )
-  
-  pca_df$Group <- anotaciones$grupo_cb[match(pca_df$Sample, anotaciones$ID)]
-  
-  # Plot PCA (unchanged)
-p_pca <- ggplot(pca_df, aes(x = PC1, y = PC2, color = Group, label = Sample)) +
-  geom_point(size = 3) +
-  geom_text_repel(size = 3, max.overlaps = Inf) +  # <--- añade etiquetas con repelente
-  scale_color_manual(values = ann_colors$Group) +
-  labs(title = paste0("PCA - ", titulo),
-       x = paste0("PC1 (", pc1_var, "% varianza)"),
-       y = paste0("PC2 (", pc2_var, "% varianza)")) +
-  theme_minimal()
-
-  
-  # t-SNE with safer perplexity
-  set.seed(123)
-  n_samples <- nrow(mat_scaled)
-  perplexity_value <- min(5, floor((n_samples - 1) / 3))  # More conservative
-  
-  cat("Running t-SNE with perplexity =", perplexity_value, "\n")  # Debug
-  
-  tsne_res <- Rtsne(mat_scaled, dims = 2, perplexity = perplexity_value)
-  
-  tsne_df <- data.frame(
-    Sample = rownames(mat_scaled),
-    tSNE1 = tsne_res$Y[,1],
-    tSNE2 = tsne_res$Y[,2]
-  )
-  
-  tsne_df$Group <- anotaciones$grupo_cb[match(tsne_df$Sample, anotaciones$ID)]
-  
-  p_tsne <- ggplot(tsne_df, aes(x = tSNE1, y = tSNE2, color = Group)) +
-    geom_point(size = 3) +
-    scale_color_manual(values = ann_colors$Group) +
-    labs(title = paste0("t-SNE - ", titulo)) +
+    labs(title = paste("Expresión de", gene_name_edad, "por grupo de edad"),
+         x = "", y = "log2(Expresión)") +
     theme_minimal()
-  
-  list(PCA_plot = p_pca, tSNE_plot = p_tsne)
 }
-
-cat("Number of samples in global analysis:", length(muestras_global), "\n")
-# Ejecutar y guardar plots en lista
-resultados_global <- analizar_cluster(muestras_global, "Global", expr_matrix_filtered, genes_seleccionados, db_completa_log2)
-resultados_ith_braf_high <- analizar_cluster(muestras_ith_braf_high, "ITH High vs BRAF/MEK High", expr_matrix_filtered, genes_seleccionados, db_completa_log2)
-resultados_ith_high_low <- analizar_cluster(muestras_ith_high_low, "ITH High vs ITH Low", expr_matrix_filtered, genes_seleccionados, db_completa_log2)
-resultados_braf_high_low <- analizar_cluster(muestras_braf_high_low, "BRAF/MEK High vs BRAF/MEK Low", expr_matrix_filtered, genes_seleccionados, db_completa_log2)
-
-# Mostrar plots ejemplo
-print(resultados_global$PCA_plot)
-print(resultados_global$tSNE_plot)
-
-print(resultados_ith_braf_high$PCA_plot)
-print(resultados_ith_braf_high$tSNE_plot)
-
-print(resultados_ith_high_low$PCA_plot)
-print(resultados_ith_high_low$tSNE_plot)
-
-print(resultados_braf_high_low$PCA_plot)
-print(resultados_braf_high_low$tSNE_plot)
-
-# Define output directory (change if needed)
-output_dir <- "plots/"
-if (!dir.exists(output_dir)) dir.create(output_dir)
-
-# Function to save plots consistently
-save_plot <- function(plot_obj, filename, width = 8, height = 6) {
-  ggsave(
-    filename = paste0(output_dir, filename),
-    plot = plot_obj,
-    device = "png",
-    width = width,
-    height = height,
-    dpi = 300,
-    bg = "white"
-  )
-}
-
-# Save Global Results
-save_plot(resultados_global$PCA_plot, "01_PCA_global.png")
-save_plot(resultados_global$tSNE_plot, "02_tSNE_global.png")
-
-# Save ITH vs BRAF High Results
-save_plot(resultados_ith_braf_high$PCA_plot, "03_PCA_ITH_vs_BRAF_high.png")
-save_plot(resultados_ith_braf_high$tSNE_plot, "04_tSNE_ITH_vs_BRAF_high.png")
-
-# Save ITH High vs Low Results
-save_plot(resultados_ith_high_low$PCA_plot, "05_PCA_ITH_high_vs_low.png")
-save_plot(resultados_ith_high_low$tSNE_plot, "06_tSNE_ITH_high_vs_low.png")
-
-# Save BRAF High vs Low Results
-save_plot(resultados_braf_high_low$PCA_plot, "07_PCA_BRAF_high_vs_low.png")
-save_plot(resultados_braf_high_low$tSNE_plot, "08_tSNE_BRAF_high_vs_low.png")
-
-cat("All plots saved to:", normalizePath(output_dir), "\n")
-
-
-colnames(db_completa_log2)
-
-
-library(uwot)
-library(ggplot2)
-
-analizar_umap <- function(muestras, titulo, expr_mat, genes_sel, anotaciones) {
-  genes_en_matriz <- sapply(strsplit(colnames(expr_mat), "_"), function(x) x[2])
-  cols_filtradas <- colnames(expr_mat)[genes_en_matriz %in% genes_sel]
-  muestras_val <- intersect(muestras, rownames(expr_mat))
-  cat("Número de muestras tras filtrado:", length(muestras_val), "\n")
-  mat_sub <- expr_mat[muestras_val, cols_filtradas, drop = FALSE]
-  if (ncol(mat_sub) == 0) stop("No hay genes seleccionados después del filtrado.")
-  if (nrow(mat_sub) == 0) stop("No hay muestras tras filtrado.")
-  mat_scaled <- scale(mat_sub)
-  if (any(!is.finite(mat_scaled))) stop("Matriz contiene NA/NaN/Inf tras escalar.")
-  set.seed(123)
-  umap_res <- umap(mat_scaled, n_neighbors = 10, min_dist = 0.3, metric = "euclidean")
-  umap_df <- data.frame(
-    Sample = rownames(mat_scaled),
-    UMAP1 = umap_res[,1],
-    UMAP2 = umap_res[,2]
-  )
-  umap_df$Group <- anotaciones$grupo_cb[match(umap_df$Sample, anotaciones$ID)]
-  p_umap <- ggplot(umap_df, aes(x = UMAP1, y = UMAP2, color = Group)) +
-    geom_point(size = 3) +
-    scale_color_manual(values = ann_colors$Group) +
-    labs(title = paste0("UMAP - ", titulo)) +
-    theme_minimal()
-  return(p_umap)
-}
-
-# Generar UMAPs para todos los grupos que ya tienes
-umap_global <- analizar_umap(muestras_global, "Global", expr_matrix_filtered, genes_seleccionados, db_completa_log2)
-umap_ith_braf_high <- analizar_umap(muestras_ith_braf_high, "ITH High vs BRAF/MEK High", expr_matrix_filtered, genes_seleccionados, db_completa_log2)
-umap_ith_high_low <- analizar_umap(muestras_ith_high_low, "ITH High vs ITH Low", expr_matrix_filtered, genes_seleccionados, db_completa_log2)
-umap_braf_high_low <- analizar_umap(muestras_braf_high_low, "BRAF/MEK High vs BRAF/MEK Low", expr_matrix_filtered, genes_seleccionados, db_completa_log2)
-
-# Mostrar plots
-print(umap_global)
-print(umap_ith_braf_high)
-print(umap_ith_high_low)
-print(umap_braf_high_low)
-
-# Guardar plots
-output_dir <- "plots/"
-if (!dir.exists(output_dir)) dir.create(output_dir)
-
-ggsave(paste0(output_dir, "09_UMAP_global.png"), umap_global, width=8, height=6, dpi=300, bg="white")
-ggsave(paste0(output_dir, "10_UMAP_ITH_vs_BRAF_high.png"), umap_ith_braf_high, width=8, height=6, dpi=300, bg="white")
-ggsave(paste0(output_dir, "11_UMAP_ITH_high_vs_low.png"), umap_ith_high_low, width=8, height=6, dpi=300, bg="white")
-ggsave(paste0(output_dir, "12_UMAP_BRAF_high_vs_low.png"), umap_braf_high_low, width=8, height=6, dpi=300, bg="white")
-
-cat("UMAP plots generados y guardados en:", normalizePath(output_dir), "\n")
 
 ```
-
 
 
 ```{r boxplots biomarcadores}
-library(ggpubr)
-library(dplyr)
-library(ggplot2)
-library(ggpubr)
 library(dplyr)
 library(tidyr)
+library(ggplot2)
+library(ggpubr)
 library(gridExtra)
 
-# Eliminar muestra GEM12
+# --- Filtrar muestra GEM12 ---
 db_completa_log2 <- db_completa_log2 %>% filter(ID != "GEM12")
 
-# Prepare data for plotting
+# --- Preparar datos para plot ---
 plot_data <- db_completa_log2 %>%
   dplyr::select(ID, grupo, clinical_benefit) %>%
   cbind(., expr_matrix_filtered[rownames(expr_matrix_filtered) %in% db_completa_log2$ID, cols_filtradas]) %>%
@@ -1221,7 +562,7 @@ plot_data <- db_completa_log2 %>%
     Group = paste(grupo, clinical_benefit, sep = "_")
   )
 
-
+# --- Resultados de limma para p-valor y logFC ---
 resultados_limma_plot <- final_results %>%
   dplyr::select(gene_clean, P.Value, adj.P.Val, logFC, contrast) %>%
   rename(
@@ -1230,6 +571,7 @@ resultados_limma_plot <- final_results %>%
     padj = adj.P.Val
   )
 
+# --- Definir comparaciones ---
 comparisons <- list(
   c("ITH_high", "ITH_low"),
   c("BRAF_MEK_high", "BRAF_MEK_low"),
@@ -1237,205 +579,12 @@ comparisons <- list(
   c("ITH_low", "BRAF_MEK_low")
 )
 
-contrast_names <- c(
-  "ITH_High_vs_Low",
-  "BRAF_MEK_High_vs_Low",
-  "ITH_High_vs_BRAF_MEK_High",
-  "ITH_Low_vs_BRAF_MEK_Low"
-)
-
-create_boxplots_limma_all <- function(grupo1, grupo2, contraste) {
-  grupos_interes <- c(grupo1, grupo2)
-  
-  plot_data_sub <- plot_data %>%
-    filter(Group %in% grupos_interes)
-  
-  limma_sub <- resultados_limma_plot %>% filter(contrast == contraste)
-  
-  plot_data_sub <- plot_data_sub %>%
-    left_join(limma_sub, by = "Gene")
-  
-  create_gene_plot <- function(gene) {
-    df <- plot_data_sub %>% filter(Gene == gene)
-    pval <- unique(df$pval)
-    padj <- unique(df$padj)
-    logfc <- unique(df$logFC)
-    
-    sig <- ifelse(!is.na(pval) & pval < 0.05 & abs(logfc) > 1, "*", "")
-    
-    p_label <- ifelse(!is.na(pval), paste0("limma p = ", signif(pval, 3)), "p-value NA")
-    padj_label <- ifelse(!is.na(padj), paste0("FDR = ", signif(padj, 3)), "")
-    
-    ggplot(df, aes(x = Group, y = Expression, fill = Group)) +
-      geom_boxplot(outlier.shape = NA, alpha = 0.7) +
-      geom_jitter(width = 0.2, size = 1) +
-      scale_fill_manual(values = ann_colors$Group) +
-      labs(
-        title = paste0(gene, " (", contraste, ") ", sig),
-        subtitle = paste(p_label, padj_label),
-        x = "",
-        y = "Expression (log2)"
-      ) +
-      theme_minimal() +
-      theme(
-        axis.text.x = element_text(angle = 45, hjust = 1),
-        legend.position = "none"
-      )
-  }
-  
-  genes <- unique(plot_data_sub$Gene)
-  plots <- lapply(genes, create_gene_plot)
-  return(plots)
-}
-
-if (!dir.exists("boxplots")) dir.create("boxplots")
-
-for (i in seq_along(comparisons)) {
-  grupo1 <- comparisons[[i]][1]
-  grupo2 <- comparisons[[i]][2]
-  contraste <- contrast_names[i]
-  
-  plots <- create_boxplots_limma_all(grupo1, grupo2, contraste)
-  
-  for (j in seq_along(plots)) {
-    ggsave(
-      filename = paste0("boxplots/", unique(plot_data$Gene)[j], "_", contraste, ".png"),
-      plot = plots[[j]],
-      width = 6,
-      height = 5,
-      dpi = 300
-    )
-  }
-  
-  ncol <- 4
-  nrow <- ceiling(length(plots) / ncol)
-  
-  grob_plot <- arrangeGrob(grobs = plots, ncol = ncol, nrow = nrow)
-  
-  png(paste0("boxplots/combined_expression_plot_", contraste, ".png"),
-      width = 15, height = 20, units = "in", res = 300)
-  grid::grid.draw(grob_plot)
-  dev.off()
-}
-
-
-library(ggpubr)
-library(dplyr)
-library(ggplot2)
-library(tidyr)
-
-# Asegúrate de que plot_data tiene estas columnas:
-# ID, grupo, clinical_benefit, Gene, Expression, Group (grupo_clinical concatenado)
-
-# Definir comparaciones a mostrar en el gráfico:
-comparisons <- list(
-  c("ITH_high", "ITH_low"),
-  c("BRAF_MEK_high", "BRAF_MEK_low"),
-  c("ITH_high", "BRAF_MEK_high"),
-  c("ITH_low", "BRAF_MEK_low")
-)
-
-# Usamos resultados limma para obtener p-valor para cada gen y comparación
-# Asumiendo final_results con columnas: gene_clean, P.Value, adj.P.Val, logFC, contrast
-
-resultados_limma_plot <- final_results %>%
-  dplyr::select(gene_clean, P.Value, adj.P.Val, logFC, contrast) %>%
-  rename(
-    Gene = gene_clean,
-    pval = P.Value,
-    padj = adj.P.Val
-  )
-
-# Función para crear el boxplot por gen con todas las comparaciones
-create_grouped_boxplot <- function(gene) {
-  
-  df <- plot_data %>% filter(Gene == gene)
-  
-  # Sacar pval de limma para cada comparación y ponerlo como texto para etiquetas
-  pvals_text <- sapply(comparisons, function(cmp) {
-    # Contraste esperado en final_results (ajustar si cambia)
-    contrast_name <- switch(paste0(cmp, collapse = "_"),
-      "ITH_high_ITH_low" = "ITH_High_vs_Low",
-      "BRAF_MEK_high_BRAF_MEK_low" = "BRAF_MEK_High_vs_Low",
-      "ITH_high_BRAF_MEK_high" = "ITH_High_vs_BRAF_MEK_High",
-      "ITH_low_BRAF_MEK_low" = "ITH_Low_vs_BRAF_MEK_Low",
-      NA
-    )
-    if (is.na(contrast_name)) return(NA)
-    
-    row <- resultados_limma_plot %>% filter(Gene == gene & contrast == contrast_name)
-    if (nrow(row) == 0) return(NA)
-    paste0("p=", signif(row$pval, 3))
-  })
-  
-  names(pvals_text) <- sapply(comparisons, paste, collapse = " vs ")
-  
-  # Crear el boxplot
-  p <- ggplot(df, aes(x = Group, y = Expression, fill = Group)) +
-    geom_boxplot(outlier.shape = NA, alpha = 0.7) +
-    geom_jitter(width = 0.15, size = 1.5) +
-    scale_fill_manual(values = ann_colors$Group) +
-    labs(
-      title = paste("Expression of", gene),
-      y = "Expression (log2)",
-      x = ""
-    ) +
-    theme_minimal() +
-    theme(
-      axis.text.x = element_text(angle = 45, hjust = 1),
-      legend.position = "none"
-    ) +
-    stat_compare_means(
-      comparisons = comparisons,
-      method = "wilcox.test",
-      label = "p.signif",
-      hide.ns = TRUE
-    )
-  
-  return(p)
-}
-
-# Crear y guardar plots por gen
-if (!dir.exists("boxplots")) dir.create("boxplots")
-
-boxplots_grouped <- lapply(unique(plot_data$Gene), function(g) {
-  p <- create_grouped_boxplot(g)
-  ggsave(
-    filename = paste0("boxplots/grouped_", g, "_all_comparisons.png"),
-    plot = p,
-    width = 7,
-    height = 5,
-    dpi = 300
-  )
-  p
-})
-
-# (Opcional) plot combinado
-library(gridExtra)
-ncol <- 4
-nrow <- ceiling(length(boxplots_grouped) / ncol)
-combined_grob <- arrangeGrob(grobs = boxplots_grouped, ncol = ncol, nrow = nrow)
-png("boxplots/grouped_all_genes_all_comparisons.png", width = 20, height = 30, units = "in", res = 300)
-grid::grid.draw(combined_grob)
-dev.off()
-
-
-
-# Define comparisons for statistical testing
-comparisons <- list(
-  c("ITH_high", "ITH_low"),
-  c("BRAF_MEK_high", "BRAF_MEK_low"),
-  c("ITH_high", "BRAF_MEK_high"),
-  c("ITH_low", "BRAF_MEK_low")
-)
-
-# Function to create grouped boxplots
+# --- Crear boxplot por gen ---
 create_gene_boxplot <- function(gene) {
-  plot_data %>%
-    filter(Gene == gene) %>%
-    ggplot(aes(x = Group, y = Expression, fill = Group)) +
+  df <- plot_data %>% filter(Gene == gene)
+  ggplot(df, aes(x = Group, y = Expression, fill = Group)) +
     geom_boxplot(outlier.shape = NA, alpha = 0.7) +
-    geom_jitter(width = 0.2, size = 1) +
+    geom_jitter(width = 0.2, size = 1.5) +
     scale_fill_manual(values = ann_colors$Group) +
     stat_compare_means(
       comparisons = comparisons,
@@ -1455,11 +604,10 @@ create_gene_boxplot <- function(gene) {
     )
 }
 
-# Create and save plots for all genes
-boxplot_list <- lapply(unique(plot_data$Gene), create_gene_boxplot)
-
-# Save all plots
+# --- Crear y guardar plots ---
 if (!dir.exists("boxplots")) dir.create("boxplots")
+
+boxplot_list <- lapply(unique(plot_data$Gene), create_gene_boxplot)
 
 for (i in seq_along(boxplot_list)) {
   gene_name <- unique(plot_data$Gene)[i]
@@ -1472,29 +620,17 @@ for (i in seq_along(boxplot_list)) {
   )
 }
 
-# Create a combined plot (2x6 grid)
-combined_plot <- ggarrange(
-  plotlist = boxplot_list,
-  ncol = 4,
-  nrow = 5,
-  common.legend = TRUE
-)
-
-# Cargar gridExtra si no lo has hecho
-library(gridExtra)
-
-# Convertir a grob
-grob_plot <- arrangeGrob(grobs = boxplot_list, ncol = 4, nrow = 4)
+# --- Crear plot combinado ---
+combined_plot <- ggarrange(plotlist = boxplot_list, ncol = 4, nrow = 5, common.legend = TRUE)
 
 # Guardar como PNG
 png("boxplots/combined_expression_plot.png", width = 15, height = 20, units = "in", res = 300)
-grid::grid.draw(grob_plot)
+grid::grid.draw(combined_plot)
 dev.off()
-
-colnames(final_results)
 
 
 ```
+
 
 
 
