@@ -1,36 +1,32 @@
 ---
 title: "Machine Learning"
-author: "Alba de la Puente Noël"
+author: "xxx"
 date: "2025-07-10"
 output: html_document
 ---
 
 ```{r}
-# Instalar paquetes si no están instalados
-if (!require("BiocManager")) install.packages("BiocManager")
-BiocManager::install(c(
+# -------------------- INSTALAR Y CARGAR PAQUETES --------------------
+required_packages <- c(
   "TCGAbiolinks", "edgeR", "tidyverse", "biomaRt", 
-  "uwot", "dbscan", "factoextra", "survival", "survminer", "pheatmap"
-))
+  "uwot", "dbscan", "factoextra", "survival", "survminer", "pheatmap", 
+  "SummarizedExperiment"
+)
 
-# -------------------- CARGA DE LIBRERÍAS --------------------
-library(TCGAbiolinks)
-library(edgeR)
-library(tidyverse)
-library(biomaRt)
-library(uwot)         # UMAP
-library(dbscan)       # HDBSCAN
-library(factoextra)   # K-means visualización
-library(survival)
-library(survminer)
-library(pheatmap)
-library(stringr)
-library(purrr)
-library(SummarizedExperiment)
-
+for (pkg in required_packages) {
+  if (!require(pkg, character.only = TRUE)) {
+    if (pkg %in% rownames(installed.packages()) == FALSE) {
+      if (pkg %in% c("TCGAbiolinks", "edgeR", "biomaRt", "SummarizedExperiment")) {
+        BiocManager::install(pkg, ask = FALSE)
+      } else {
+        install.packages(pkg)
+      }
+    }
+    library(pkg, character.only = TRUE)
+  }
+}
 
 # -------------------- DESCARGA Y PREPROCESADO DE DATOS --------------------
-
 project <- "TCGA-SKCM"
 
 query <- GDCquery(
@@ -46,23 +42,22 @@ data_se <- GDCprepare(query)
 
 counts <- assay(data_se)
 
+# Normalización
 dge <- DGEList(counts = counts)
 dge <- calcNormFactors(dge)
 cpm_norm <- cpm(dge, normalized.lib.sizes = TRUE)
 log2_cpm <- log2(cpm_norm + 1)
 
+# Datos clínicos
 clinical_data <- colData(data_se) %>%
   as.data.frame() %>%
   mutate(
     PFS_time = ifelse(vital_status == "Dead", days_to_death, days_to_last_follow_up),
     PFS_status = ifelse(vital_status == "Dead", 1, 0),
-    submitter_id_short = substr(barcode, 1, 12)  # IDs TCGA cortos
+    submitter_id_short = substr(barcode, 1, 12)  # IDs cortos TCGA
   )
 
-
-
 # -------------------- ANOTACIÓN GENÉTICA --------------------
-
 ensembl_ids <- gsub("\\..*", "", rownames(log2_cpm))
 
 mart <- useMart("ensembl", dataset = "hsapiens_gene_ensembl")
@@ -83,36 +78,45 @@ expr_df <- as.data.frame(log2_cpm) %>%
   summarise(across(where(is.numeric), mean)) %>%
   column_to_rownames("hgnc_symbol")
 
+# Guardar resultado para uso posterior
+saveRDS(expr_df, file = "log2_cpm_TCGA_SKCM.rds")
+saveRDS(clinical_data, file = "clinical_data_TCGA_SKCM.rds")
 
 ```
 
 
 ```{r ITH low vs high}
-# -------------------- SELECCIÓN DE GENSET --------------------
+# -------------------- ANÁLISIS ITH: UMAP + CLUSTERING --------------------
 
-#genes_ITH <- c( "ARG2", "CXCL10", "KIT", "CXCL9", "CXCL1", "BNIP3L", "CCL14", "CXCL2","WNT5B", "LAG3", "STAT1", "SNCA", "WNT2", "PLA2G2A", "GBP4", "SOX2","HLA-DQA2", "GBP1", "TDO2", "BAMBI", "SPRY4", "CXCL8", "IDO1", "CCL4","MAPK10", "CD8B", "ANGPT1", "HMGB1", "CD274", "MAGEB2", "CCL18", "IRF1", "HLA-DRB1", "CXCL11", "CCL20", "CD80", "CD45RO", "IFIT3", "HLA-C", "OAS3","FAM124B", "IFITM1", "TNFRSF10C", "FCN1", "SLC11A1", "ACVR1C", "IFNAR1","RUNX3", "BID", "CD70", "DPP4", "CCNA1", "MGMT", "VCAM1", "SRP54", "RB1","IRF9", "TREM1", "OAS2", "PTGS2", "TYMS", "HLA-DOA", "P4HA1", "FOXP3","HLA-DRA", "GPR160", "ROCK1", "TNFRSF10B")
+# Lista de genes ITH (modificable por el usuario)
+genes_ITH <- c(
+  "CXCL10", "KIT", "CXCL9", "CXCL1", "BNIP3L", "CCL14", "CXCL2","WNT5B",
+  "STAT1", "WNT2", "GBP4", "SOX2","GBP1","SPRY4", "IDO1", "CCL4","MAPK10",
+  "ANGPT1", "HMGB1", "CCL18", "CCL20", "OAS3","FAM124B", "IFITM1",  "FCN1",
+  "BID",  "CCNA1",  "VCAM1"
+)
 
-# -------------------- GENES ITH --------------------
+# Matriz de expresión completa
+expr_df_full <- expr_df  # debe existir previamente
 
-genes_ITH <- c("CXCL10", "KIT", "CXCL9", "CXCL1", "BNIP3L", "CCL14", "CXCL2","WNT5B", "STAT1", "WNT2", "GBP4", "SOX2","GBP1","SPRY4", "IDO1", "CCL4","MAPK10", "ANGPT1", "HMGB1", "CCL18", "CCL20", "OAS3","FAM124B", "IFITM1",  "FCN1", "BID",  "CCNA1",  "VCAM1")
-
-# Matriz original de expresión
-expr_df_full <- expr_df  # asegúrate de tener esta con todos los genes y muestras
-
-# Filtrar y transponer
+# Filtrar genes válidos y transponer
 genes_validos_ITH <- intersect(genes_ITH, rownames(expr_df_full))
 expr_ITH <- expr_df_full[genes_validos_ITH, , drop = FALSE]
 expr_t_ITH <- t(expr_ITH)
 
-# UMAP + Clustering
+# Escalado y PCA
 expr_scaled_ITH <- scale(expr_t_ITH)
-pc_scores_ITH <- prcomp(expr_scaled_ITH)$x[, 1:15]
-umap_ITH <- umap(pc_scores_ITH, n_neighbors = 10, min_dist = 0.01, metric = "cosine")
+pc_scores_ITH <- prcomp(expr_scaled_ITH)$x[, 1:min(15, ncol(expr_scaled_ITH))]
+
+# UMAP
 set.seed(123)
+umap_ITH <- umap(pc_scores_ITH, n_neighbors = 10, min_dist = 0.01, metric = "cosine")
+
+# K-means clustering
 km_ITH <- kmeans(umap_ITH, centers = 2, nstart = 25)
 clusters_ITH <- factor(km_ITH$cluster)
 
-# Etiquetas
+# Etiquetas genéricas
 cluster_labels <- c("1" = "low responder (hipotético)", "2" = "high responder (hipotético)")
 
 df_umap_ITH <- as.data.frame(umap_ITH)
@@ -120,20 +124,20 @@ colnames(df_umap_ITH) <- c("UMAP1", "UMAP2")
 df_umap_ITH$cluster <- factor(clusters_ITH, levels = c("1", "2"), labels = cluster_labels)
 df_umap_ITH$sample <- rownames(expr_t_ITH)
 
-# Guardar plot
+# -------------------- PLOT UMAP --------------------
 umap_plot_ith <- ggplot(df_umap_ITH, aes(x = UMAP1, y = UMAP2, color = cluster)) +
   geom_point(alpha = 0.8, size = 3) +
   scale_color_manual(values = c("steelblue1", "royalblue4")) +
   theme_minimal(base_size = 14) +
   labs(title = "UMAP genes significativos Inmunoterapia",
        x = "UMAP 1", y = "UMAP 2", color = "Cluster")
+
 ggsave("UMAP_ITH.png", plot = umap_plot_ith, width = 8, height = 6, dpi = 300)
 
-# Guardar expresión con cluster
+# -------------------- HEATMAP DE EXPRESIÓN --------------------
 expr_df_ITH <- as.data.frame(expr_t_ITH)
 expr_df_ITH$cluster <- df_umap_ITH$cluster
 
-# Heatmap
 expr_mean_ITH <- expr_df_ITH %>%
   group_by(cluster) %>%
   summarise(across(where(is.numeric), mean)) %>%
@@ -144,14 +148,15 @@ annotation_col_ITH <- data.frame(Cluster = factor(colnames(expr_mean_ITH), level
 rownames(annotation_col_ITH) <- colnames(expr_mean_ITH)
 
 annotation_colors_ITH <- list(
-  Cluster = c("low responder (hipotético)" = "steelblue1", "high responder (hipotético)" = "royalblue4")
+  Cluster = c("low responder (hipotético)" = "steelblue1",
+              "high responder (hipotético)" = "royalblue4")
 )
 
 png("heatmap_ITH.png", width = 1000, height = 1800, res = 150)
 pheatmap(expr_mean_ITH,
          scale = "row",
          clustering_method = "complete",
-         main = "Expresión media",
+         main = "Expresión media genes ITH",
          fontsize_row = 8,
          fontsize_col = 12,
          annotation_col = annotation_col_ITH,
@@ -160,151 +165,15 @@ pheatmap(expr_mean_ITH,
 dev.off()
 
 
-
-
-
-
-# -------------------- LIBRERÍAS --------------------
-library(caret)
-library(dplyr)
-library(tibble)
-library(randomForest)
-library(pROC)
-library(ggplot2)
-library(e1071)  # para SVM
-
-# -------------------- DATOS --------------------
-data_ml <- expr_df
-data_ml$cluster <- factor(data_ml$cluster, levels = c("Low responder", "High responder"))
-
-# -------------------- FORMATEO --------------------
-colnames(data_ml) <- make.names(colnames(data_ml))
-
-# -------------------- PARTICIÓN ENTRENAMIENTO/TEST --------------------
-set.seed(123)
-train_index <- createDataPartition(data_ml$cluster, p = 0.8, list = FALSE)
-train_data <- data_ml[train_index, ]
-test_data  <- data_ml[-train_index, ]
-
-# -------------------- RANDOM FOREST --------------------
-set.seed(123)
-rf_model <- randomForest(cluster ~ ., data = train_data, importance = TRUE, ntree = 500)
-rf_pred <- predict(rf_model, newdata = test_data)
-
-# Matriz de confusión RF
-conf_matrix_rf <- confusionMatrix(rf_pred, test_data$cluster)
-print(conf_matrix_rf$table)
-
-# Curva ROC RF
-rf_prob <- predict(rf_model, newdata = test_data, type = "prob")[, "High responder"]
-rf_roc <- roc(response = test_data$cluster,
-              predictor = rf_prob,
-              levels = c("Low responder", "High responder"),
-              direction = "<")
-
-# Guardar ROC RF
-png("ROC_RF.png", width = 1000, height = 800, res = 300)
-plot(rf_roc, col = "darkgreen", main = paste0("ROC Random Forest (AUC = ", round(auc(rf_roc), 2), ")"))
-dev.off()
-
-# Importancia variables RF
-importance_df <- as.data.frame(importance(rf_model))
-importance_df$Gene <- rownames(importance_df)
-top_genes <- importance_df %>% arrange(desc(MeanDecreaseGini)) %>% head(15)
-
-p1 <- ggplot(top_genes, aes(x = reorder(Gene, MeanDecreaseGini), y = MeanDecreaseGini)) +
-  geom_bar(stat = "identity", fill = "steelblue") +
-  coord_flip() +
-  theme_minimal(base_size = 12) +
-  labs(title = "Top 15 genes por importancia (Random Forest)", x = "Gene", y = "MeanDecreaseGini")
-
-ggsave("Top_genes_RF.png", plot = p1, dpi = 300)
-
-# -------------------- SVM --------------------
-set.seed(123)
-svm_model <- svm(cluster ~ ., data = train_data, probability = TRUE)
-svm_pred <- predict(svm_model, newdata = test_data)
-conf_matrix_svm <- confusionMatrix(svm_pred, test_data$cluster)
-print(conf_matrix_svm$table)
-
-# Curva ROC SVM
-svm_probs <- attr(predict(svm_model, newdata = test_data, probability = TRUE), "probabilities")[, "High responder"]
-roc_svm <- roc(response = test_data$cluster,
-               predictor = svm_probs,
-               levels = c("Low responder", "High responder"),
-               direction = "<")
-
-png("ROC_SVM.png", width = 1000, height = 800, res = 300)
-plot(roc_svm, col = "darkred", main = paste0("ROC SVM (AUC = ", round(auc(roc_svm), 2), ")"))
-dev.off()
-
-# -------------------- COMPARACIÓN DE AUC --------------------
-print(paste0("AUC Random Forest: ", round(auc(rf_roc), 3)))
-print(paste0("AUC SVM: ", round(auc(roc_svm), 3)))
-
-# -------------------- VALIDACIÓN CRUZADA --------------------
-# Para caret, las clases deben tener nombres válidos (sin espacios ni puntos)
-data_ml$cluster <- factor(data_ml$cluster,
-                          levels = c("Low responder", "High responder"),
-                          labels = c("Low_responder", "High_responder"))
-
-control <- trainControl(method = "cv", number = 5,
-                        classProbs = TRUE,
-                        summaryFunction = twoClassSummary,
-                        savePredictions = TRUE)
-
-set.seed(123)
-rf_cv <- train(cluster ~ ., data = data_ml,
-               method = "rf",
-               trControl = control,
-               metric = "ROC",
-               ntree = 500)
-
-set.seed(123)
-svm_cv <- train(cluster ~ ., data = data_ml,
-                method = "svmRadial",
-                trControl = control,
-                metric = "ROC",
-                preProcess = c("center", "scale"),
-                tuneLength = 5)
-
-print(rf_cv)
-print(svm_cv)
-
-# Obtener ROC para CV (extraemos predicciones)
-get_cv_roc <- function(model_cv, positive_class = "High_responder") {
-  preds <- model_cv$pred
-  # Filtramos predicciones con parámetros óptimos
-  best_params <- model_cv$bestTune
-  for (param_name in names(best_params)) {
-    preds <- preds[preds[[param_name]] == best_params[[param_name]], ]
-  }
-  roc(response = preds$obs,
-      predictor = preds[[positive_class]],
-      levels = rev(levels(preds$obs)))
-}
-
-roc_rf_cv <- get_cv_roc(rf_cv)
-roc_svm_cv <- get_cv_roc(svm_cv)
-
-# Plot ROC comparados validación cruzada
-png("ROC_CV_comparison.png", width = 1500, height = 1000, res = 300)
-plot(roc_rf_cv, col = "blue", lwd = 2, main = "ROC comparados CV RF vs SVM")
-lines(roc_svm_cv, col = "red", lwd = 2)
-legend("bottomright",
-       legend = c(paste0("RF AUC=", round(auc(roc_rf_cv), 3)),
-                  paste0("SVM AUC=", round(auc(roc_svm_cv), 3))),
-       col = c("blue", "red"),
-       lwd = 2)
-dev.off()
-
-
-
 ```
 
 
 
 
+
+# ==============================
+# UMAP y Heatmap para genes BRAF/MEKi
+# ==============================
 ```{r BRAF low vs high}
 # -------------------- LIBRERÍAS --------------------
 library(caret)
@@ -313,262 +182,131 @@ library(tibble)
 library(randomForest)
 library(pROC)
 library(ggplot2)
-library(e1071)  # para SVM
+library(e1071)  # SVM
 library(uwot)
 library(pheatmap)
 
 # -------------------- PREPARACIÓN DE DATOS --------------------
+# expr_df_full: matriz de expresión log2 genes x muestras
+# cluster_labels: vector de nombres de clusters, p.ej. c("low responder", "high responder")
 
-#genes_braf_mek <- c("HLA-DQB1", "COL11A1", "KIT", "NCAM1", "APH1B", "IL12RB2", "HEY1", "IL6","APLNR", "GPC4", "IL18", "TNFSF9", "RUNX3", "IL1B", "RIPK2", "SLC16A1", "IL33", "FPR1", "CD14", "GOT2", "PARP12", "RAD50", "RAD51C", "ADORA2A", "LGALS9")
-
-
-# -------------------- GENES BRAF/MEK --------------------
-
+# -------------------- GENES DE INTERÉS --------------------
 genes_BRAF <- c("HLA-DQB1", "COL11A1", "APH1B", "IL12RB2", "HEY1", "IL6", "IL18")
 
+# Filtrar genes presentes en la matriz
 genes_validos_BRAF <- intersect(genes_BRAF, rownames(expr_df_full))
 expr_BRAF <- expr_df_full[genes_validos_BRAF, , drop = FALSE]
+
+# Transponer para que filas = muestras, columnas = genes
 expr_t_BRAF <- t(expr_BRAF)
 
+# Escalar datos
 expr_scaled_BRAF <- scale(expr_t_BRAF)
+
+# PCA previo a UMAP
 pc_scores_BRAF <- prcomp(expr_scaled_BRAF)$x[, 1:6]
+
+# UMAP
+set.seed(123)
 umap_BRAF <- umap(pc_scores_BRAF, n_neighbors = 10, min_dist = 0.01, metric = "cosine")
+
+# Clustering (k-means)
 set.seed(123)
 km_BRAF <- kmeans(umap_BRAF, centers = 2, nstart = 25)
 clusters_BRAF <- factor(km_BRAF$cluster)
 
+# -------------------- DATAFRAME PARA PLOTEAR --------------------
 df_umap_BRAF <- as.data.frame(umap_BRAF)
 colnames(df_umap_BRAF) <- c("UMAP1", "UMAP2")
 df_umap_BRAF$cluster <- factor(clusters_BRAF, levels = c("1", "2"), labels = cluster_labels)
 df_umap_BRAF$sample <- rownames(expr_t_BRAF)
 
+# -------------------- PLOT UMAP --------------------
 umap_plot_braf <- ggplot(df_umap_BRAF, aes(x = UMAP1, y = UMAP2, color = cluster)) +
   geom_point(alpha = 0.8, size = 3) +
   scale_color_manual(values = c("plum", "slateblue")) +
   theme_minimal(base_size = 14) +
-  labs(title = "UMAP genes significativos terapia BRAF/MEKi",
+  labs(title = "UMAP de genes significativos BRAF/MEKi",
        x = "UMAP 1", y = "UMAP 2", color = "Cluster")
-ggsave("UMAP_BRAF_MEK_nr.png", plot = umap_plot_braf, width = 8, height = 6, dpi = 300)
 
-# Guardar expresión con cluster
+ggsave("UMAP_BRAF_MEK.png", plot = umap_plot_braf, width = 8, height = 6, dpi = 300)
+
+# -------------------- HEATMAP --------------------
+# Añadir cluster a matriz de expresión
 expr_df_BRAF <- as.data.frame(expr_t_BRAF)
 expr_df_BRAF$cluster <- df_umap_BRAF$cluster
 
+# Calcular expresión media por cluster
 expr_mean_BRAF <- expr_df_BRAF %>%
   group_by(cluster) %>%
   summarise(across(where(is.numeric), mean)) %>%
   column_to_rownames("cluster") %>%
   t()
 
+# Anotaciones para heatmap
 annotation_col_BRAF <- data.frame(Cluster = factor(colnames(expr_mean_BRAF), levels = cluster_labels))
 rownames(annotation_col_BRAF) <- colnames(expr_mean_BRAF)
 
 annotation_colors_BRAF <- list(
-  Cluster = c("low responder (hipotético)" = "plum", "high responder (hipotético)" = "slateblue")
+  Cluster = c("low responder" = "plum", "high responder" = "slateblue")
 )
 
-png("heatmap_BRAF_MEK_nr.png", width = 1200, height = 800, res = 150)
+# Guardar heatmap
+png("heatmap_BRAF_MEK.png", width = 1200, height = 800, res = 150)
 pheatmap(expr_mean_BRAF,
          scale = "row",
          clustering_method = "complete",
-         main = "Expresión media",
+         main = "Expresión media por cluster",
          fontsize_row = 8,
          fontsize_col = 12,
          annotation_col = annotation_col_BRAF,
          annotation_colors = annotation_colors_BRAF,
          cellwidth = 100, cellheight = 8)
 dev.off()
-
-
-
-
-
-
-# -------------------- MACHINE LEARNING --------------------
-
-# Formatear nombres válidos para ML
-colnames(expr_df_b) <- make.names(colnames(expr_df_b))
-
-# Asegurar factor correcto
-expr_df_b$cluster <- factor(expr_df_b$cluster, levels = cluster_labels_b)
-
-# Partición entrenamiento/test
-set.seed(123)
-train_index_b <- createDataPartition(expr_df_b$cluster, p = 0.8, list = FALSE)
-train_data_b <- expr_df_b[train_index_b, ]
-test_data_b <- expr_df_b[-train_index_b, ]
-
-# Random Forest
-set.seed(123)
-rf_model_b <- randomForest(cluster ~ ., data = train_data_b, importance = TRUE, ntree = 500)
-rf_pred_b <- predict(rf_model_b, newdata = test_data_b)
-conf_matrix_rf_b <- confusionMatrix(rf_pred_b, test_data_b$cluster)
-print(conf_matrix_rf_b$table)
-
-rf_prob_b <- predict(rf_model_b, newdata = test_data_b, type = "prob")[, "High responder"]
-rf_roc_b <- roc(response = test_data_b$cluster,
-                predictor = rf_prob_b,
-                levels = c("Low responder", "High responder"),
-                direction = "<")
-
-png("ROC_RF_BRAF.png", width = 1000, height = 800, res = 300)
-plot(rf_roc_b, col = "darkgreen", main = paste0("ROC Random Forest BRAF (AUC = ", round(auc(rf_roc_b), 2), ")"))
-dev.off()
-
-# Importancia variables RF
-importance_df_b <- as.data.frame(importance(rf_model_b))
-importance_df_b$Gene <- rownames(importance_df_b)
-top_genes_b <- importance_df_b %>% arrange(desc(MeanDecreaseGini)) %>% head(15)
-
-p2 <- ggplot(top_genes_b, aes(x = reorder(Gene, MeanDecreaseGini), y = MeanDecreaseGini)) +
-  geom_bar(stat = "identity", fill = "plum") +
-  coord_flip() +
-  theme_minimal(base_size = 12) +
-  labs(title = "Top 15 genes por importancia (Random Forest BRAF)")
-
-ggsave("Top_genes_RF_BRAF.png", plot = p2, dpi = 300)
-
-# SVM
-set.seed(123)
-svm_model_b <- svm(cluster ~ ., data = train_data_b, probability = TRUE)
-svm_pred_b <- predict(svm_model_b, newdata = test_data_b)
-conf_matrix_svm_b <- confusionMatrix(svm_pred_b, test_data_b$cluster)
-print(conf_matrix_svm_b$table)
-
-svm_probs_b <- attr(predict(svm_model_b, newdata = test_data_b, probability = TRUE), "probabilities")[, "High responder"]
-roc_svm_b <- roc(response = test_data_b$cluster,
-                 predictor = svm_probs_b,
-                 levels = c("Low responder", "High responder"),
-                 direction = "<")
-
-png("ROC_SVM_BRAF.png", width = 1000, height = 800, res = 300)
-plot(roc_svm_b, col = "darkred", main = paste0("ROC SVM BRAF (AUC = ", round(auc(roc_svm_b), 2), ")"))
-dev.off()
-
-# Comparación AUC
-print(paste0("AUC Random Forest BRAF: ", round(auc(rf_roc_b), 3)))
-print(paste0("AUC SVM BRAF: ", round(auc(roc_svm_b), 3)))
-
-# -------------------- VALIDACIÓN CRUZADA --------------------
-
-# Cambiar niveles para caret (sin espacios ni puntos)
-expr_df_b$cluster <- factor(expr_df_b$cluster,
-                            levels = cluster_labels_b,
-                            labels = c("Low_responder", "High_responder"))
-
-control_b <- trainControl(method = "cv", number = 5,
-                          classProbs = TRUE,
-                          summaryFunction = twoClassSummary,
-                          savePredictions = TRUE)
-
-set.seed(123)
-rf_cv_b <- train(cluster ~ ., data = expr_df_b,
-                 method = "rf",
-                 trControl = control_b,
-                 metric = "ROC",
-                 ntree = 500)
-
-set.seed(123)
-svm_cv_b <- train(cluster ~ ., data = expr_df_b,
-                  method = "svmRadial",
-                  trControl = control_b,
-                  metric = "ROC",
-                  preProcess = c("center", "scale"),
-                  tuneLength = 5)
-
-print(rf_cv_b)
-print(svm_cv_b)
-
-# ROC validación cruzada
-get_cv_roc <- function(model_cv, positive_class = "High_responder") {
-  preds <- model_cv$pred
-  best_params <- model_cv$bestTune
-  for (param_name in names(best_params)) {
-    preds <- preds[preds[[param_name]] == best_params[[param_name]], ]
-  }
-  roc(response = preds$obs,
-      predictor = preds[[positive_class]],
-      levels = rev(levels(preds$obs)))
-}
-
-roc_rf_cv_b <- get_cv_roc(rf_cv_b)
-roc_svm_cv_b <- get_cv_roc(svm_cv_b)
-
-png("ROC_CV_comparison_BRAF.png", width = 1500, height = 1000, res = 300)
-plot(roc_rf_cv_b, col = "blue", lwd = 2, main = "ROC comparados CV RF vs SVM BRAF")
-lines(roc_svm_cv_b, col = "red", lwd = 2)
-legend("bottomright",
-       legend = c(paste0("RF AUC=", round(auc(roc_rf_cv_b), 3)),
-                  paste0("SVM AUC=", round(auc(roc_svm_cv_b), 3))),
-       col = c("blue", "red"),
-       lwd = 2)
-dev.off()
-
 ```
 
-```{r confusion matrix}
-# -------------------- MATRIZ DE CONFUSIÓN --------------------
 
-# -------------------- LIBRERÍAS --------------------
+
+```{r confusion matrix}
 library(dplyr)
 library(ggplot2)
 
-# -------------------- DATAFRAME CON RESPUESTAS CONJUNTAS --------------------
+# Crear columna de respuestas conjuntas
 df_clusters <- df_clusters %>%
   mutate(
     Respuesta_Conjunta = case_when(
-      Cluster_ITH == "high responder (hipotético)" & Cluster_BRAF == "high responder (hipotético)" ~ "doble respondedores",
-      Cluster_ITH == "low responder (hipotético)" & Cluster_BRAF == "low responder (hipotético)" ~ "doble refractarios",
-      Cluster_ITH == "high responder (hipotético)" & Cluster_BRAF == "low responder (hipotético)" ~ "respondedores ITH",
-      Cluster_ITH == "low responder (hipotético)" & Cluster_BRAF == "high responder (hipotético)" ~ "respondedores BRAF/MEKi",
+      Cluster_ITH == "high" & Cluster_BRAF == "high" ~ "doble respondedores",
+      Cluster_ITH == "low" & Cluster_BRAF == "low" ~ "doble refractarios",
+      Cluster_ITH == "high" & Cluster_BRAF == "low" ~ "respondedores ITH",
+      Cluster_ITH == "low" & Cluster_BRAF == "high" ~ "respondedores BRAF/MEKi",
       TRUE ~ "otros"
     )
   )
 
-# -------------------- TABLA RESUMEN --------------------
+# Tabla resumen
 tabla_counts <- table(df_clusters$Respuesta_Conjunta)
 tabla_pct <- round(100 * tabla_counts / sum(tabla_counts), 2)
-
 tabla_resumen <- data.frame(
   Categoria = names(tabla_counts),
   Conteo = as.vector(tabla_counts),
   Porcentaje = as.vector(tabla_pct)
 )
 
-# Mostrar tabla resumen
-print(tabla_resumen)
+# Guardar CSV
+write.csv(tabla_resumen, "tabla_resumen_respuestas.csv", row.names = FALSE)
 
-library(flextable)
-library(officer)
-
-# Crear objeto flextable
-ft <- flextable(tabla_resumen)
-
-# Opciones básicas de formato
-ft <- autofit(ft)
-ft <- theme_vanilla(ft)
-
-# Guardar en Word
-read_docx() %>%
-  body_add_flextable(ft) %>%
-  print(target = "tabla_resumen_respuestas.docx")
-
-# Si quieres PDF, necesitas crear el documento Word y luego convertirlo a PDF externamente
-
-
-# -------------------- GRÁFICO DE BARRAS --------------------
-png("grafico_respuesta_conjunta_tesis.png", width = 1500, height = 1200, res = 150)
-
+# Gráfico de barras
+png("grafico_respuesta_conjunta.png", width = 1500, height = 1200, res = 150)
 ggplot(tabla_resumen, aes(x = reorder(Categoria, -Porcentaje), y = Porcentaje, fill = Categoria)) +
   geom_col(color = "black", alpha = 0.85) +
   geom_text(aes(label = paste0(Porcentaje, "%")), vjust = -0.5, size = 5) +
   scale_fill_manual(values = c(
-  "doble respondedores" = "lightgreen",   # lila vibrante
-  "doble refractarios" = "hotpink1",    # rosa vivo/rojizo
-  "respondedores ITH" = "#3B82F6",     # azul vivo brillante
-  "respondedores BRAF/MEKi" = "#9F7AEA",# lila medio intenso
-  "otros" = "#B3AEDC"                  # lavanda claro vivo
-)) +
+    "doble respondedores" = "lightgreen",
+    "doble refractarios" = "hotpink1",
+    "respondedores ITH" = "#3B82F6",
+    "respondedores BRAF/MEKi" = "#9F7AEA",
+    "otros" = "#B3AEDC"
+  )) +
   theme_minimal(base_size = 16) +
   labs(
     title = "Distribución de respuestas conjuntas (ITH y BRAF/MEKi)",
@@ -577,188 +315,7 @@ ggplot(tabla_resumen, aes(x = reorder(Categoria, -Porcentaje), y = Porcentaje, f
     fill = "Categoría"
   ) +
   theme(axis.text.x = element_text(angle = 25, hjust = 1))
-
 dev.off()
-
-```
-
-
-
-
-```{r MODELO COMBINADO}
-library(caret)
-library(randomForest)
-library(e1071)
-library(pROC)
-library(ggplot2)
-library(dplyr)
-library(tidyr)
-
-# --- Asumiendo que tienes los modelos rf_model, rf_model_b, svm_model, svm_model_b
-# y las matrices de expresión expr_df (ITH) y expr_df_b (BRAF), con sus clusters
-colnames(expr_df) <- make.names(colnames(expr_df))
-colnames(expr_df_b) <- make.names(colnames(expr_df_b))
-
-# --- Predicciones individuales para cada conjunto ---
-pred_ith_rf <- predict(rf_model, newdata = expr_df)
-pred_braf_rf <- predict(rf_model_b, newdata = expr_df_b)
-
-pred_ith_svm <- predict(svm_model, newdata = expr_df)
-pred_braf_svm <- predict(svm_model_b, newdata = expr_df_b)
-
-# --- Crear etiquetas combinadas (4 grupos) ---
-make_group <- function(pred_ith, pred_braf) {
-  factor(paste(pred_ith, pred_braf, sep = "_"),
-         levels = c("Low responder_Low responder",
-                    "Low responder_High responder",
-                    "High responder_Low responder",
-                    "High responder_High responder"),
-         labels = c("Group1", "Group2", "Group3", "Group4"))
-}
-
-combined_rf <- make_group(pred_ith_rf, pred_braf_rf)
-combined_svm <- make_group(pred_ith_svm, pred_braf_svm)
-
-# --- Preparar dataset combinado (para multiclasificación) ---
-data_rf <- cbind(expr_df, cluster_braf = expr_df_b$cluster)
-data_rf$group <- combined_rf
-data_rf$group <- factor(data_rf$group, levels = c("Group1", "Group2", "Group3", "Group4"))
-
-# Para SVM (mismo dataset)
-data_svm <- data_rf
-data_svm$group <- combined_svm
-
-# --- Entrenamiento / Test split ---
-set.seed(123)
-train_idx <- createDataPartition(data_rf$group, p = 0.8, list = FALSE)
-
-train_rf <- data_rf[train_idx, ]
-test_rf <- data_rf[-train_idx, ]
-
-train_svm <- data_svm[train_idx, ]
-test_svm <- data_svm[-train_idx, ]
-
-# --- Modelo Random Forest multiclasificación ---
-set.seed(123)
-rf_multi <- randomForest(group ~ ., data = train_rf, ntree = 500, importance = TRUE)
-pred_rf_multi <- predict(rf_multi, newdata = test_rf)
-conf_rf_multi <- confusionMatrix(pred_rf_multi, test_rf$group)
-print("Matriz confusión RF multiclasificación")
-print(conf_rf_multi$table)
-
-# --- Modelo SVM multiclasificación con caret y validación cruzada ---
-control <- trainControl(method = "cv", number = 5,
-                        classProbs = TRUE,
-                        summaryFunction = multiClassSummary,
-                        savePredictions = "final")
-
-set.seed(123)
-svm_multi <- train(group ~ ., data = train_svm,
-                   method = "svmRadial",
-                   trControl = control,
-                   preProcess = c("center", "scale"),
-                   tuneLength = 5,
-                   metric = "ROC")
-
-pred_svm_multi <- predict(svm_multi, newdata = test_svm)
-conf_svm_multi <- confusionMatrix(pred_svm_multi, test_svm$group)
-print("Matriz confusión SVM multiclasificación")
-print(conf_svm_multi$table)
-
-# --- Importancia variables RF ---
-png("Importancia_variables_RF_multiclass.png", width = 1000, height = 800, res = 300)
-varImpPlot(rf_multi, main = "Importancia variables RF multiclasificación")
-dev.off()
-
-# --- Validación cruzada para RF multiclasificación con caret ---
-rf_cv <- train(
-  group ~ .,
-  data = data_rf,
-  method = "rf",
-  trControl = control,
-  metric = "ROC",
-  ntree = 500
-)
-
-# --- Validación cruzada para SVM multiclasificación con caret ---
-svm_cv <- train(
-  group ~ .,
-  data = data_svm,
-  method = "svmRadial",
-  trControl = control,
-  preProcess = c("center", "scale"),
-  tuneLength = 5,
-  metric = "ROC"
-)
-
-# --- Filtrar predicciones mejores tuning ---
-best_rf <- rf_cv$bestTune
-best_svm <- svm_cv$bestTune
-
-preds_rf <- rf_cv$pred
-preds_svm <- svm_cv$pred
-
-for (param in names(best_rf)) {
-  preds_rf <- preds_rf[preds_rf[[param]] == best_rf[[param]], ]
-}
-for (param in names(best_svm)) {
-  preds_svm <- preds_svm[preds_svm[[param]] == best_svm[[param]], ]
-}
-
-# --- Función para obtener datos ROC por clase ---
-get_roc_df <- function(obs, pred_probs, class_label) {
-  roc_obj <- roc(response = as.numeric(obs == class_label), predictor = pred_probs)
-  data.frame(
-    Specificity = rev(roc_obj$specificities),
-    Sensitivity = rev(roc_obj$sensitivities),
-    Class = class_label,
-    AUC = auc(roc_obj)
-  )
-}
-
-classes <- levels(preds_rf$obs)
-
-roc_data_rf <- do.call(rbind, lapply(classes, function(cl) {
-  get_roc_df(preds_rf$obs, preds_rf[[cl]], cl) %>% mutate(Model = "Random Forest")
-}))
-
-roc_data_svm <- do.call(rbind, lapply(classes, function(cl) {
-  get_roc_df(preds_svm$obs, preds_svm[[cl]], cl) %>% mutate(Model = "SVM")
-}))
-
-roc_data <- rbind(roc_data_rf, roc_data_svm)
-
-# --- Graficar curvas ROC ---
-p_roc <- ggplot(roc_data, aes(x = 1 - Specificity, y = Sensitivity, color = Model)) +
-  geom_line(size = 1) +
-  facet_wrap(~Class) +
-  theme_minimal(base_size = 14) +
-  labs(title = "Curvas ROC por clase y modelo (Validación cruzada)",
-       x = "False Positive Rate (1 - Specificity)",
-       y = "True Positive Rate (Sensitivity)") +
-  scale_color_manual(values = c("Random Forest" = "blue", "SVM" = "red"))
-
-print(p_roc)
-ggsave("ROC_by_class_CV_models.png", p_roc, dpi = 300, width = 12, height = 8)
-
-# --- Métricas resumen y AUC global multiclasificación ---
-metrics_rf <- rf_cv$results %>% filter(row_number() == which.max(ROC))
-metrics_svm <- svm_cv$results %>% filter(row_number() == which.max(ROC))
-
-auc_rf <- multiclass.roc(preds_rf$obs, preds_rf[, classes])$auc
-auc_svm <- multiclass.roc(preds_svm$obs, preds_svm[, classes])$auc
-
-summary_df <- tibble(
-  Model = c("Random Forest", "SVM"),
-  Accuracy = c(metrics_rf$Accuracy, metrics_svm$Accuracy),
-  Kappa = c(metrics_rf$Kappa, metrics_svm$Kappa),
-  AUC = c(auc_rf, auc_svm)
-)
-
-print(summary_df)
-write.csv(summary_df, "Resumen_metricas_CV.csv", row.names = FALSE)
-
-
 
 ```
 
